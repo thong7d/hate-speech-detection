@@ -1,0 +1,11 @@
+# Tự động chuẩn hóa line endings thành LF cho tất cả text files
+* text=auto eol=lf
+
+# Cố định định dạng cho các file code và cấu hình quan trọng
+*.py text eol=lf
+*.ipynb text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.json text eol=lf
+*.jsonl text eol=lf

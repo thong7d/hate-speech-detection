@@ -9,9 +9,9 @@ __pycache__/
 env/
 venv/
 
-# Data and Models
-data/
-models/
+# Data and Models (Only ignore root folders, NOT src/data or src/models)
+/data/
+/models/
 *.csv
 *.parquet
 *.pkl
