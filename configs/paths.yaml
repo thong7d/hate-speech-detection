@@ -1,0 +1,47 @@
+# configs/paths.yaml
+drive_root: "/content/drive/MyDrive/HateSpeech_NLP"
+
+data:
+  raw_dir: "{drive_root}/data/raw/vihsd"
+  train_raw: "{drive_root}/data/raw/vihsd/train.csv"
+  dev_raw:   "{drive_root}/data/raw/vihsd/dev.csv"
+  test_raw:  "{drive_root}/data/raw/vihsd/test.csv"
+  train_processed: "{drive_root}/data/processed/train.parquet"
+  val_processed:   "{drive_root}/data/processed/val.parquet"
+  test_processed:  "{drive_root}/data/processed/test.parquet"
+
+models:
+  baseline:          "{drive_root}/models/baseline/tfidf_lr.pkl"
+  checkpoints_dir:   "{drive_root}/models/xlmr_vihsd/checkpoints"
+  final_hf_dir:      "{drive_root}/models/xlmr_vihsd/final_hf"
+
+hf_cache: "/tmp/hf_cache"
+
+results:
+  class_weights:    "{drive_root}/results/class_weights.json"
+  baseline_report:  "{drive_root}/results/baseline_report.json"
+  finetune_report:  "{drive_root}/results/finetune_report.json"
+  error_analysis:   "{drive_root}/results/error_analysis.csv"
+
+logs:
+  agent_events:     "{drive_root}/logs/agent_events.jsonl"
+
+model:
+  backbone: "xlm-roberta-base"
+  num_labels: 3
+  label_map: {0: "CLEAN", 1: "OFFENSIVE", 2: "HATE"}
+
+training:
+  max_length: 128
+  batch_size: 16
+  eval_batch_size: 32
+  num_epochs: 10
+  learning_rate: 2.0e-5
+  warmup_ratio: 0.1
+  weight_decay: 0.01
+  dataloader_num_workers: 0
+  fp16: true
+  save_total_limit: 2
+  save_weights_only: true
+  load_best_model_at_end: true
+  metric_for_best_model: "eval_f1_macro"

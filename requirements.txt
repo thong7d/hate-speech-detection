@@ -1,0 +1,15 @@
+transformers==4.40.2
+datasets==2.19.2
+torch>=2.1.0
+accelerate==0.29.3
+scikit-learn==1.4.2
+pandas==2.2.2
+pyarrow==16.0.0
+langdetect==1.0.9
+underthesea==6.8.4
+fastapi==0.111.0
+uvicorn==0.29.0
+gradio==4.28.3
+pyngrok==7.1.6
+omegaconf==2.3.0
+google-generativeai==0.5.4
