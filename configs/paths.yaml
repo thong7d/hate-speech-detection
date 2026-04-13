@@ -42,7 +42,7 @@ training:
   metric_for_best_model: eval_f1_macro
 
 # ====== ADDITIONS FOR PIPELINE V3 ======
-hf_model_id: ""
+hf_model_id: "thong7d/vihsd-xlmr-hate-speech"
 
 deployment:
   api_host: "0.0.0.0"
