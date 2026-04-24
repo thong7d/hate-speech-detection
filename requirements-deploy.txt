@@ -1,0 +1,32 @@
+# requirements-deploy.txt
+# ============================================================
+# Deployment-only dependencies (CPU inference, no training).
+# Smaller than the full requirements.txt — excludes training-
+# specific libraries (datasets, accelerate, scikit-learn, etc.)
+# that are not needed at serve time.
+#
+# Used by: Dockerfile
+# ============================================================
+
+# --- Core ML inference ---
+torch==2.2.2                 # CPU wheel — much smaller than CUDA build
+transformers==4.40.2         # Must match the version used for fine-tuning
+sentencepiece==0.2.0         # Required by XLM-RoBERTa tokenizer
+protobuf==4.25.3             # Required by sentencepiece
+
+# --- API framework ---
+fastapi==0.111.0
+uvicorn[standard]==0.29.0    # [standard] adds httptools + uvloop for performance
+pydantic==2.7.1              # FastAPI 0.111 requires Pydantic v2
+
+# --- Gradio web demo ---
+gradio==4.28.3
+
+# --- Language detection ---
+langdetect==1.0.9
+
+# --- HTTP client (Gradio → FastAPI proxy) ---
+requests==2.32.2
+
+# --- Utilities ---
+omegaconf==2.3.0             # Config loading (not strictly needed at serve time, but minimal cost)

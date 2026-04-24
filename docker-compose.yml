@@ -1,0 +1,88 @@
+# docker-compose.yml
+# ============================================================
+# Docker Compose file for local deployment of the ViHSD system.
+#
+# Services:
+#   vihsd-api  — FastAPI REST API  (host port 8000)
+#   (Gradio runs inside the same container on port 7860)
+#
+# Volumes:
+#   hf_model_cache — Persists downloaded HF model weights between
+#                    container restarts so you don't re-download 280 MB
+#                    every time.
+#
+# Usage:
+#   docker compose up --build        # first run
+#   docker compose up                # subsequent runs (uses cached image)
+#   docker compose down              # stop and remove containers
+#   docker compose down -v           # also delete the model cache volume
+# ============================================================
+
+services:
+  vihsd-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # target: runtime          # Uncomment to build only the runtime stage
+    image: vihsd-hate-speech:latest
+    container_name: vihsd-api
+
+    # ---- Port mapping ----
+    ports:
+      - "8000:8000"   # FastAPI  → http://localhost:8000
+      - "7860:7860"   # Gradio   → http://localhost:7860
+
+    # ---- Model cache volume (persists HF weights between restarts) ----
+    volumes:
+      - hf_model_cache:/tmp/hf_cache
+
+    # ---- Environment variables ----
+    # Override here or use a .env file (never commit .env to Git).
+    environment:
+      # --- Model source (HuggingFace Hub) ---
+      HF_MODEL_ID: "thong7d/vihsd-xlmr-hate-speech"
+      # HF_TOKEN: ""                # Uncomment and set if repo is private
+
+      # --- HuggingFace cache (points to the mounted volume) ---
+      TRANSFORMERS_CACHE: "/tmp/hf_cache"
+      HF_HOME: "/tmp/hf_cache"
+      HF_DATASETS_CACHE: "/tmp/hf_datasets_cache"
+
+      # --- API settings ---
+      API_HOST: "0.0.0.0"
+      API_PORT: "8000"
+      MAX_LENGTH: "128"
+      BORDERLINE_LOW: "0.35"
+      BORDERLINE_HIGH: "0.65"
+
+      # --- Gradio ---
+      ENABLE_GRADIO: "true"
+      GRADIO_PORT: "7860"
+
+      # --- Suppress tokenizer parallelism warning ---
+      TOKENIZERS_PARALLELISM: "false"
+
+    # ---- Resource limits (CPU-only inference on a laptop) ----
+    # Adjust based on your machine's available RAM.
+    deploy:
+      resources:
+        limits:
+          memory: 4G       # XLM-RoBERTa CPU inference needs ~2–3 GB
+
+    # ---- Restart policy ----
+    restart: unless-stopped
+
+    # ---- Health check (mirrors Dockerfile HEALTHCHECK) ----
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s    # Give the model time to download on first run
+
+# ---- Named volumes ----
+volumes:
+  hf_model_cache:
+    # Default driver stores on the Docker host filesystem.
+    # Delete with: docker volume rm hate-speech-detection_hf_model_cache
+    driver: local

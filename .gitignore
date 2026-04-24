@@ -5,6 +5,7 @@ __pycache__/
 
 # Environments
 .env
+.env.*
 .venv
 env/
 venv/
@@ -24,3 +25,10 @@ venv/
 .vscode/
 .idea/
 .ipynb_checkpoints/
+
+# Docker
+*.dockerignore
+
+# OS
+.DS_Store
+Thumbs.db
