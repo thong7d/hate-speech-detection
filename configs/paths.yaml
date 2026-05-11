@@ -1,31 +1,58 @@
-drive_root: /content/drive/MyDrive/HateSpeech_NLP
+# configs/paths.yaml
+# ============================================================
+# Single Source of Truth for all paths in the project.
+#
+# ARCHITECTURE:
+#   - Data & results  → LOCAL (inside the repo, git-ignored)
+#   - Model weights   → CLOUD (HuggingFace Hub)
+#   - Model cache     → /tmp/hf_cache (ephemeral, not in repo)
+#
+# For Colab notebooks: override project_root at runtime in Cell 0.
+#   e.g. project_root = "/content/hate-speech-detection"
+# For local/Docker: project_root defaults to "." (repo root).
+# ============================================================
+
+# --- Root paths ---
+# project_root is resolved at runtime; "." works for local and Docker.
+project_root: "."
+
 data:
-  raw_dir: '{drive_root}/data/raw/vihsd'
-  train_raw: '{drive_root}/data/raw/vihsd/train.csv'
-  dev_raw: '{drive_root}/data/raw/vihsd/dev.csv'
-  test_raw: '{drive_root}/data/raw/vihsd/test.csv'
-  train_processed: '{drive_root}/data/processed/train.parquet'
-  val_processed: '{drive_root}/data/processed/dev.parquet'
-  test_processed: '{drive_root}/data/processed/test.parquet'
+  raw_dir:           "{project_root}/data/raw/vihsd"
+  train_raw:         "{project_root}/data/raw/vihsd/train.csv"
+  dev_raw:           "{project_root}/data/raw/vihsd/dev.csv"
+  test_raw:          "{project_root}/data/raw/vihsd/test.csv"
+  train_processed:   "{project_root}/data/processed/train.parquet"
+  val_processed:     "{project_root}/data/processed/dev.parquet"
+  test_processed:    "{project_root}/data/processed/test.parquet"
+
 models:
-  baseline: '{drive_root}/models/baseline/tfidf_lr.pkl'
-  checkpoints_dir: '{drive_root}/models/xlmr_vihsd/checkpoints'
-  final_hf_dir: '{drive_root}/models/xlmr_vihsd/final_hf'
-hf_cache: /tmp/hf_cache
+  baseline:          "{project_root}/models/baseline/tfidf_lr.pkl"
+  checkpoints_dir:   "{project_root}/models/xlmr_vihsd/checkpoints"
+  final_hf_dir:      "{project_root}/models/xlmr_vihsd/final_hf"
+
 results:
-  class_weights: '{drive_root}/results/class_weights.json'
-  baseline_report: '{drive_root}/results/baseline_report.json'
-  finetune_report: '{drive_root}/results/finetune_report.json'
-  error_analysis: '{drive_root}/results/error_analysis.csv'
+  class_weights:     "{project_root}/results/class_weights.json"
+  baseline_report:   "{project_root}/results/baseline_report.json"
+  finetune_report:   "{project_root}/results/finetune_report.json"
+  error_analysis:    "{project_root}/results/error_analysis.csv"
+
 logs:
-  agent_events: '{drive_root}/logs/agent_events.jsonl'
+  agent_events:      "{project_root}/logs/agent_events.jsonl"
+
+# --- HuggingFace Hub (cloud model storage) ---
+hf_model_id: "thong7d/vihsd-xlmr-hate-speech"
+hf_cache: "/tmp/hf_cache"
+
+# --- Model architecture ---
 model:
-  backbone: xlm-roberta-base
+  backbone: "xlm-roberta-base"
   num_labels: 3
   label_map:
     0: CLEAN
     1: OFFENSIVE
     2: HATE
+
+# --- Training config (Colab T4 optimized) ---
 training:
   max_length: 128
   batch_size: 16
@@ -39,18 +66,17 @@ training:
   save_total_limit: 2
   save_weights_only: true
   load_best_model_at_end: true
-  metric_for_best_model: eval_f1_macro
+  metric_for_best_model: "eval_f1_macro"
 
-# ====== ADDITIONS FOR PIPELINE V3 ======
-hf_model_id: "thong7d/vihsd-xlmr-hate-speech"
-
+# --- Deployment config ---
 deployment:
   api_host: "0.0.0.0"
   api_port: 8000
   gradio_share: true
 
+# --- Agent config ---
 agent:
-  gemini_model: "gemini-1.5-flash"
+  gemini_model: "gemini-2.0-flash"
   borderline_threshold_low: 0.35
   borderline_threshold_high: 0.65
   max_clarification_rounds: 1

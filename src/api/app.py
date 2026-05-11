@@ -12,9 +12,9 @@ Endpoints:
     GET  /docs     — Interactive OpenAPI documentation (auto-generated).
 
 Environment variables (set in docker-compose.yml or .env):
-    HF_MODEL_ID   — HuggingFace Hub model repo, e.g. "thong7d/vihsd-xlmr-hate-speech"
-    HF_TOKEN      — (Optional) HuggingFace read token for private repos.
-    MAX_LENGTH    — Token sequence length (default: 128).
+    HF_MODEL_ID     — HuggingFace Hub model repo, e.g. "thong7d/vihsd-xlmr-hate-speech"
+    HF_TOKEN        — (Optional) HuggingFace read token for private repos.
+    MAX_LENGTH      — Token sequence length (default: 128).
     BORDERLINE_LOW  — Lower confidence threshold for borderline flag (default: 0.35).
     BORDERLINE_HIGH — Upper confidence threshold for borderline flag (default: 0.65).
 """
@@ -46,7 +46,7 @@ logger = logging.getLogger("vihsd.api")
 # Configuration (sourced entirely from environment variables)
 # ---------------------------------------------------------------------------
 HF_MODEL_ID     = os.environ.get("HF_MODEL_ID", "thong7d/vihsd-xlmr-hate-speech")
-HF_TOKEN        = os.environ.get("HF_TOKEN", None)          # None → public repo
+HF_TOKEN        = os.environ.get("HF_TOKEN", None)
 MAX_LENGTH      = int(os.environ.get("MAX_LENGTH", "128"))
 BORDERLINE_LOW  = float(os.environ.get("BORDERLINE_LOW",  "0.35"))
 BORDERLINE_HIGH = float(os.environ.get("BORDERLINE_HIGH", "0.65"))
@@ -54,7 +54,7 @@ BORDERLINE_HIGH = float(os.environ.get("BORDERLINE_HIGH", "0.65"))
 LABEL_MAP: dict[int, str] = {0: "CLEAN", 1: "OFFENSIVE", 2: "HATE"}
 
 # ---------------------------------------------------------------------------
-# Global model state — lazy-loaded once at startup via lifespan
+# Global model state — loaded once at startup via lifespan
 # ---------------------------------------------------------------------------
 _model:     Optional[AutoModelForSequenceClassification] = None
 _tokenizer: Optional[AutoTokenizer] = None
@@ -83,7 +83,6 @@ def _load_model() -> None:
     _model = _model.to(_device)
     _model.eval()
 
-    # Release any leftover allocations from the download phase
     gc.collect()
     if _device.type == "cuda":
         torch.cuda.empty_cache()
@@ -104,7 +103,6 @@ async def lifespan(app: FastAPI):
     """Load model once before accepting requests; clean up on shutdown."""
     _load_model()
     yield
-    # Shutdown: free GPU memory
     global _model, _tokenizer
     del _model, _tokenizer
     gc.collect()
@@ -160,14 +158,8 @@ def predict(request: PredictRequest) -> PredictResponse:
     """
     Classify a single text for hate speech.
 
-    **Input:** JSON body `{"text": "...", "language": "vi" | null}`
-
-    **Output:**
-    - `label`        — CLEAN / OFFENSIVE / HATE
-    - `confidence`   — Softmax probability of the predicted class
-    - `scores`       — Full probability distribution over all 3 classes
-    - `is_borderline`— True when confidence is in [0.35, 0.65]; triggers agent clarification
-    - `latency_ms`   — End-to-end wall-clock time in milliseconds
+    Returns label (CLEAN/OFFENSIVE/HATE), confidence score,
+    per-class probabilities, and borderline flag.
     """
     if _model is None or _tokenizer is None:
         raise HTTPException(status_code=503, detail="Model not loaded yet.")
@@ -197,17 +189,12 @@ def predict(request: PredictRequest) -> PredictResponse:
     # --- Inference (no gradient computation needed) ---
     with torch.no_grad():
         logits = _model(input_ids=input_ids, attention_mask=attention_mask).logits
-        probs  = torch.softmax(logits, dim=-1).cpu().numpy()[0]   # shape: (3,)
+        probs  = torch.softmax(logits, dim=-1).cpu().numpy()[0]
 
     pred_id    = int(probs.argmax())
     confidence = float(probs.max())
     scores     = {LABEL_MAP[i]: round(float(probs[i]), 4) for i in range(3)}
     latency_ms = (time.perf_counter() - start) * 1000
-
-    logger.debug(
-        "predict | lang=%s label=%s conf=%.3f latency=%.1fms",
-        detected_lang, LABEL_MAP[pred_id], confidence, latency_ms,
-    )
 
     return PredictResponse(
         text=request.text,
