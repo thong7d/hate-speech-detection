@@ -30,8 +30,9 @@ class ModerationTools:
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
 
         # Load model
-        self.tokenizer = AutoTokenizer.from_pretrained(model_source)
-        self.model = AutoModelForSequenceClassification.from_pretrained(model_source)
+        hf_token = os.environ.get("HF_TOKEN")
+        self.tokenizer = AutoTokenizer.from_pretrained(model_source, token=hf_token)
+        self.model = AutoModelForSequenceClassification.from_pretrained(model_source, token=hf_token)
 
         if device == "auto":
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

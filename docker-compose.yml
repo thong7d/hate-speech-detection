@@ -27,11 +27,13 @@ services:
       - "8000:8000"    # Single port: API + Gradio UI
 
     volumes:
-      - hf_model_cache:/tmp/hf_cache   # Persist model weights across restarts
+      - ./.hf_cache:/tmp/hf_cache   # Persist model weights locally
+
+    env_file:
+      - .env
 
     environment:
       HF_MODEL_ID: "thong7d/vihsd-xlmr-hate-speech"
-      # HF_TOKEN: ""                   # Uncomment for private repos
 
       TRANSFORMERS_CACHE: "/tmp/hf_cache"
       HF_HOME: "/tmp/hf_cache"
@@ -58,6 +60,4 @@ services:
       retries: 3
       start_period: 90s
 
-volumes:
-  hf_model_cache:
-    driver: local
+

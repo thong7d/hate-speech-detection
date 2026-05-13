@@ -39,3 +39,6 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+
+# HuggingFace Cache
+/.hf_cache/
