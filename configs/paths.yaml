@@ -45,7 +45,7 @@ hf_cache: "/tmp/hf_cache"
 
 # --- Model architecture ---
 model:
-  backbone: "xlm-roberta-base"
+  backbone: "vinai/phobert-base-v2"
   num_labels: 3
   label_map:
     0: CLEAN
