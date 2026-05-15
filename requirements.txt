@@ -13,3 +13,6 @@ gradio==4.28.3
 pyngrok==7.1.6
 omegaconf==2.3.0
 google-generativeai==0.5.4
+google-api-python-client
+google-auth-oauthlib
+google-auth-httplib2

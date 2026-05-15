@@ -42,3 +42,6 @@ Thumbs.db
 
 # HuggingFace Cache
 /.hf_cache/
+
+credentials.json
+token.pickle
