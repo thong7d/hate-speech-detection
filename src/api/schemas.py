@@ -33,14 +33,18 @@ class PredictResponse(BaseModel):
     """Response body for POST /predict."""
 
     text: str = Field(..., description="The original input text.")
+    processed_text: str = Field(..., description="Text after shared preprocessing.")
     language: str = Field(..., description="Detected or provided language code.")
     label: str = Field(
         ..., description="Predicted toxicity label: CLEAN, OFFENSIVE, or HATE."
     )
     label_id: int = Field(..., description="Integer encoding: 0=CLEAN, 1=OFFENSIVE, 2=HATE.")
     confidence: float = Field(..., description="Softmax probability of the predicted class.")
-    scores: Dict[str, float] = Field(
+    probabilities: Dict[str, float] = Field(
         ..., description="Softmax probability for each class."
+    )
+    scores: Dict[str, float] = Field(
+        ..., description="Backward-compatible alias of probabilities."
     )
     is_borderline: bool = Field(
         ...,

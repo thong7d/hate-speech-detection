@@ -5,10 +5,13 @@ import hashlib
 from datetime import datetime
 from typing import Optional
 
-import torch
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
 from langdetect import detect as langdetect_detect
 import google.generativeai as genai
+
+try:
+    from evaluation.classifier import load_hf_artifacts, predict_with_artifacts
+except ImportError:
+    from src.evaluation.classifier import load_hf_artifacts, predict_with_artifacts
 
 
 # ========== TOOL IMPLEMENTATIONS ==========
@@ -29,20 +32,16 @@ class ModerationTools:
         self.log_path = log_path
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
 
-        # Load model
         hf_token = os.environ.get("HF_TOKEN")
-        self.tokenizer = AutoTokenizer.from_pretrained(model_source, token=hf_token)
-        self.model = AutoModelForSequenceClassification.from_pretrained(model_source, token=hf_token)
-
-        if device == "auto":
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        else:
-            self.device = torch.device(device)
-
-        self.model = self.model.to(self.device)
-        self.model.eval()
-
-        self.label_map = {0: "CLEAN", 1: "OFFENSIVE", 2: "HATE"}
+        self.artifacts = load_hf_artifacts(
+            model_source,
+            token=hf_token,
+            device=device,
+            max_length=int(os.environ.get("MAX_LENGTH", "128")),
+        )
+        self.device = self.artifacts.device
+        self.borderline_low = float(os.environ.get("BORDERLINE_LOW", "0.35"))
+        self.borderline_high = float(os.environ.get("BORDERLINE_HIGH", "0.65"))
         print(f"✅ ModerationTools initialized on {self.device}")
 
     def classify_text(self, text: str) -> dict:
@@ -52,26 +51,20 @@ class ModerationTools:
         Input:  text (str) — the text to classify
         Output: dict with keys: label, label_id, confidence, scores, is_borderline
         """
-        encoding = self.tokenizer(
-            text, max_length=128, padding="max_length",
-            truncation=True, return_tensors="pt"
+        result = predict_with_artifacts(
+            self.artifacts,
+            text,
+            borderline_low=self.borderline_low,
+            borderline_high=self.borderline_high,
+            preprocess=True,
         )
-        input_ids = encoding["input_ids"].to(self.device)
-        attention_mask = encoding["attention_mask"].to(self.device)
-
-        with torch.no_grad():
-            outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
-            probs = torch.softmax(outputs.logits, dim=-1).cpu().numpy()[0]
-
-        pred_id = int(probs.argmax())
-        confidence = float(probs.max())
-
         return {
-            "label": self.label_map[pred_id],
-            "label_id": pred_id,
-            "confidence": round(confidence, 4),
-            "scores": {self.label_map[i]: round(float(probs[i]), 4) for i in range(3)},
-            "is_borderline": 0.35 <= confidence <= 0.65,
+            "label": result["label"],
+            "label_id": result["label_id"],
+            "confidence": result["confidence"],
+            "scores": result["scores"],
+            "probabilities": result["probabilities"],
+            "is_borderline": result["is_borderline"],
         }
 
     def detect_language(self, text: str) -> dict:
