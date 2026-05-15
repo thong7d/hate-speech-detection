@@ -1,10 +1,70 @@
 # src/data/download.py
 import os
-import requests
 import zipfile
 import shutil
 import tempfile
-from omegaconf import OmegaConf
+from urllib.request import Request, urlopen
+
+try:
+    from omegaconf import OmegaConf
+except ImportError:
+    OmegaConf = None
+
+try:
+    import requests
+except ImportError:
+    requests = None
+
+
+def _download_file(url: str, output_path: str) -> None:
+    """Download a URL with requests when available, otherwise urllib."""
+    if requests is not None:
+        response = requests.get(url, stream=True, timeout=60)
+        if response.status_code != 200:
+            raise RuntimeError(f"Failed to download file. HTTP Status: {response.status_code}")
+        with open(output_path, "wb") as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+        return
+
+    request = Request(url, headers={"User-Agent": "hate-speech-detection/1.0"})
+    with urlopen(request, timeout=60) as response, open(output_path, "wb") as f:
+        shutil.copyfileobj(response, f)
+
+
+def _load_config(config_path: str):
+    """Load paths.yaml with OmegaConf when available, otherwise parse raw_dir only."""
+    if OmegaConf is not None:
+        return OmegaConf.load(config_path)
+
+    raw_dir = None
+    in_data_section = False
+    with open(config_path, "r", encoding="utf-8") as f:
+        for line in f:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if not line.startswith(" ") and stripped.endswith(":"):
+                in_data_section = stripped[:-1] == "data"
+                continue
+            if in_data_section and stripped.startswith("raw_dir:"):
+                raw_dir = stripped.split(":", 1)[1].strip().strip('"').strip("'")
+                break
+
+    if raw_dir is None:
+        raw_dir = "{project_root}/data/raw/vihsd"
+
+    class _Data:
+        pass
+
+    class _Config:
+        pass
+
+    cfg = _Config()
+    cfg.data = _Data()
+    cfg.data.raw_dir = raw_dir
+    return cfg
 
 def download_and_extract(config_path: str):
     """
@@ -12,7 +72,7 @@ def download_and_extract(config_path: str):
     directly into the configured raw data directory.
     """
     # 1. Load configuration
-    cfg = OmegaConf.load(config_path)
+    cfg = _load_config(config_path)
     
     def resolve_path(template_path) -> str:
         """Resolve {project_root} placeholder."""
@@ -43,14 +103,8 @@ def download_and_extract(config_path: str):
     
     try:
         # 3. Download the ZIP file
-        response = requests.get(zip_url, stream=True)
-        if response.status_code == 200:
-            with open(zip_temp_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            print("✅ Download successful.")
-        else:
-            raise Exception(f"❌ Failed to download file. HTTP Status: {response.status_code}")
+        _download_file(zip_url, zip_temp_path)
+        print("Download successful.")
 
         # 4. Extract and Flatten (ignore internal folders)
         print("Extracting files...")
