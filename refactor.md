@@ -1,432 +1,296 @@
-# Bao cao refactor va debug project Hate Speech Detection
+# Bao cao Refactor Production Hate Speech Detection
 
-## 1. Muc tieu
+## 1. Tom tat thay doi
 
-File nay ghi lai cu the nhung thay doi da thuc hien de project co pipeline ro rang hon cho:
+Da refactor project theo huong production:
 
-- preprocessing;
-- train/evaluation;
-- inference trong API va agent;
-- manual robustness test;
-- data quality report;
-- bao cao ky thuat.
+- Chi giu mot notebook train chinh: `notebooks/train_colab.ipynb`.
+- Chuyen cac notebook cu vao `notebooks/archive/`.
+- Dua logic train, evaluation, export, inference vao `src/`.
+- Them config rieng cho train, model va API.
+- Them model artifact contract tai `artifacts/hate_speech_model/`.
+- Them ho tro export va upload model len Hugging Face Hub.
+- Refactor FastAPI thanh production API.
+- Them Dockerfile, docker-compose, Makefile, GitHub Actions va pytest tests.
+- Cap nhat README huong dan train Colab, chay local, Docker, Hugging Face va CI/CD.
 
-Nguyen tac khi sua:
+## 2. Cau truc project sau refactor
 
-- Khong tu tao metric accuracy/F1 neu chua chay duoc voi du lieu that.
-- Khong refactor lon toan bo cau truc project.
-- Uu tien tao ham dung chung trong `src/` de notebook, API va agent khong bi lech logic.
-
-## 2. Tom tat thay doi
-
-| Nhom | Noi dung da sua |
-|---|---|
-| Preprocessing | Them module dung chung `src/data/preprocessing.py` |
-| Data quality | Them script `src/data/quality.py` va report `results/data_quality_report.md` |
-| Inference | Them shared predictor trong `src/evaluation/classifier.py` |
-| API | Sua `src/api/app.py` de dung shared predictor |
-| API schema | Cap nhat `src/api/schemas.py`, them `processed_text` va `probabilities` |
-| Agent | Sua `src/agent/moderator.py` de dung shared predictor |
-| Evaluation | Cap nhat `src/evaluation/evaluate.py` va `src/models/classifier.py` voi metric day du hon |
-| Manual tests | Them `src/evaluation/manual_tests.py` va report `results/manual_test_report.md` |
-| Notebook | Sua `notebooks/03_preprocessing.ipynb`, `notebooks/04_baseline.ipynb`, `notebooks/05_finetune.ipynb` |
-| Report | Them `results/evaluation_report.md` |
-
-## 3. Chi tiet cac file da sua
-
-### 3.1. `src/data/preprocessing.py`
-
-File moi, dung lam single source of truth cho preprocessing.
-
-Da them:
-
-- `clean_text(text)`: xoa URL, HTML entity, mention, normalize whitespace.
-- `normalize_text_label_frame(df)`: chuan hoa DataFrame ve 2 cot bat buoc `text`, `label`.
-- `process_split(input_path, output_path)`: doc raw CSV, clean text, ghi parquet.
-- `compute_balanced_class_weights(labels, num_labels)`: tinh class weights tu train split.
-- `save_class_weights(weights, output_path)`: luu class weights dung path config.
-
-Ly do sua:
-
-- Notebook cu ghi parquet voi cot `label_id`, trong khi fine-tuning notebook lai yeu cau cot `label`.
-- De tranh train/evaluation/API dung cac cach clean text khac nhau.
-
-### 3.2. `src/data/quality.py`
-
-File moi de tao data quality report.
-
-Da them kha nang kiem tra:
-
-- so dong tung split;
-- phan bo class;
-- duplicate text trong tung split;
-- overlap text giua train/val/test;
-- report markdown tai `results/data_quality_report.md`.
-
-Trang thai hien tai:
-
-- Moi truong local chua co `pandas`, `omegaconf`, va chua co data processed nen report hien tai ghi ro `Khong du du lieu de xac minh`.
-
-Lenh chay lai:
-
-```bash
-python -m src.data.quality
+```text
+project_root/
+├── configs/
+│   ├── paths.yaml
+│   ├── train.yaml
+│   ├── model.yaml
+│   └── api.yaml
+├── notebooks/
+│   ├── train_colab.ipynb
+│   └── archive/
+│       ├── 01_data.ipynb
+│       ├── 02_eda.ipynb
+│       ├── 03_preprocessing.ipynb
+│       ├── 04_baseline.ipynb
+│       ├── 05_finetune.ipynb
+│       ├── 06_evaluation.ipynb
+│       └── 07_deployment.ipynb
+├── src/
+│   ├── api/
+│   ├── data/
+│   ├── evaluation/
+│   ├── export/
+│   ├── models/
+│   ├── monitoring/
+│   ├── training/
+│   └── utils/
+├── tests/
+├── .github/workflows/
+├── Dockerfile
+├── docker-compose.yml
+├── Makefile
+├── requirements-dev.txt
+├── requirements-deploy.txt
+├── README.md
+└── main.py
 ```
 
-### 3.3. `src/evaluation/classifier.py`
+## 3. File da them
 
-Truoc do file nay trong. Da them shared inference layer.
+| File | Muc dich |
+|---|---|
+| `configs/train.yaml` | Config train, evaluation va export artifact |
+| `configs/model.yaml` | Config load model tu Hugging Face hoac local artifact |
+| `configs/api.yaml` | Config API production |
+| `notebooks/train_colab.ipynb` | Notebook Colab duy nhat, chi goi command trong `src/` |
+| `src/utils/config.py` | Load YAML va resolve path |
+| `src/utils/seed.py` | Set seed cho reproducibility |
+| `src/training/train.py` | CLI train |
+| `src/training/trainer.py` | Logic train bang Hugging Face Trainer |
+| `src/evaluation/metrics.py` | Metric helper dung cho evaluation |
+| `src/export/export_model.py` | Export artifact va push Hugging Face Hub |
+| `src/models/registry.py` | Label mapping registry |
+| `src/api/schema.py` | Pydantic schemas production |
+| `src/api/dependencies.py` | Load classifier dependency |
+| `src/monitoring/logging_config.py` | Logging config |
+| `tests/test_api.py` | API schema tests bang mock classifier |
+| `tests/test_config.py` | Config tests |
+| `tests/test_inference.py` | Inference contract tests |
+| `tests/test_label_mapping.py` | Label mapping consistency tests |
+| `tests/test_preprocessing.py` | Shared preprocessing tests |
+| `.github/workflows/ci.yml` | CI: install, ruff, pytest, import API |
+| `.github/workflows/docker.yml` | Docker build va `/health` smoke test |
+| `requirements-dev.txt` | Dev/test dependencies |
+| `Makefile` | Lenh tien ich train, test, lint, Docker, API |
 
-Da them:
+## 4. File da sua
 
-- `ModelArtifacts`: gom model, tokenizer, device, label map, max length.
-- `load_hf_artifacts(...)`: load model/tokenizer tu Hugging Face hoac local path.
-- `predict_text(...)`: ham predict dung chung.
-- `predict_with_artifacts(...)`: predict bang artifact da load.
-- `predict_many(...)`: predict nhieu cau.
+| File | Thay doi |
+|---|---|
+| `.gitignore` | Them cache, wandb, mlruns, checkpoint artifact |
+| `Dockerfile` | Refactor thanh Dockerfile production cho FastAPI |
+| `docker-compose.yml` | Service API production, env config khong hard-code token |
+| `main.py` | Don gian hoa entrypoint uvicorn |
+| `README.md` | Viet lai huong dan production |
+| `requirements-deploy.txt` | Rut gon deploy dependencies, them PyYAML/HF hub |
+| `src/api/app.py` | Them `/health`, `/ready`, `/metadata`, `/predict`, `/predict-batch` |
+| `src/api/schemas.py` | Giu compatibility, re-export tu `schema.py` |
+| `src/data/preprocessing.py` | Them `preprocess_text()` dung chung training/inference |
+| `src/evaluation/evaluate.py` | Them evaluation CLI config-driven |
+| `src/evaluation/manual_tests.py` | Manual robustness test config-driven |
+| `src/models/classifier.py` | Them `HateSpeechClassifier`, fallback HF/local, predict batch |
 
-Ham predict tra ve:
+## 5. Notebook Colab moi
 
-```python
+- Duong dan: `notebooks/train_colab.ipynb`
+- Vai tro: wrapper, khong chua logic train/evaluate/export chinh.
+- Cac command chinh:
+
+```bash
+python -m src.training.train --config configs/train.yaml
+python -m src.evaluation.evaluate --config configs/train.yaml
+python -m src.export.export_model --config configs/train.yaml --push-to-hub
+python -m src.evaluation.manual_tests --config configs/model.yaml
+```
+
+- Output artifact: `artifacts/hate_speech_model/`
+- Neu khong co `HF_TOKEN`, notebook bo qua push Hub va in thong bao:
+
+```text
+Khong du du lieu de xac minh HF_TOKEN hoac HF_TOKEN chua duoc cau hinh
+```
+
+## 6. Model artifact
+
+- Local artifact path: `artifacts/hate_speech_model/`
+- Final model path: `artifacts/hate_speech_model/model/`
+- Hugging Face repo mac dinh: `quanghs1020/hate-speech-detection`
+- File upload mac dinh:
+  - `model/`
+  - `label_mapping.json`
+  - `metadata.json`
+  - `metrics.json`
+  - `model_card.md`
+- File khong upload mac dinh:
+  - checkpoint
+  - `.env`
+  - `HF_TOKEN`
+  - private dataset
+  - cache
+  - `.venv`
+  - `__pycache__`
+
+## 7. API production
+
+| Endpoint | Muc dich |
+|---|---|
+| `GET /health` | Healthcheck process, tra `{"status": "ok"}` |
+| `GET /ready` | Kiem tra model da load chua |
+| `GET /metadata` | Tra metadata tu artifact |
+| `POST /predict` | Predict mot text |
+| `POST /predict-batch` | Predict nhieu text |
+
+Output prediction co contract:
+
+```json
 {
-    "text": "...",
-    "processed_text": "...",
-    "label": "...",
-    "label_id": 0,
-    "confidence": 0.0,
-    "probabilities": {"CLEAN": 0.0, "OFFENSIVE": 0.0, "HATE": 0.0},
-    "scores": {"CLEAN": 0.0, "OFFENSIVE": 0.0, "HATE": 0.0},
-    "is_borderline": false
+  "text": "sample text",
+  "label": "CLEAN",
+  "confidence": 0.99,
+  "probabilities": {
+    "CLEAN": 0.99,
+    "OFFENSIVE": 0.01,
+    "HATE": 0.0
+  },
+  "model_version": "v1.0.0"
 }
 ```
 
-Ly do sua:
+## 8. Docker
 
-- API va agent truoc do moi noi tu tokenize, softmax, map label rieng.
-- Neu label map, max length, preprocessing hoac threshold thay doi, inference rat de bi lech.
-
-### 3.4. `src/api/app.py`
-
-Da refactor API de dung `load_hf_artifacts()` va `predict_with_artifacts()`.
-
-Thay doi cu the:
-
-- Bo logic load `AutoTokenizer`/`AutoModelForSequenceClassification` truc tiep trong API.
-- Bo logic tokenization/softmax truc tiep trong endpoint `/predict`.
-- API dung shared preprocessing va shared inference.
-- Health check lay device tu artifact chung.
-
-Ly do sua:
-
-- Dam bao API prediction giong evaluation/manual test/agent.
-
-### 3.5. `src/api/schemas.py`
-
-Da cap nhat response schema.
-
-Them:
-
-- `processed_text`: text sau preprocessing chung.
-- `probabilities`: xac suat tung class.
-
-Giu lai:
-
-- `scores`: alias backward-compatible de `main.py` va UI cu van dung duoc.
-
-### 3.6. `src/agent/moderator.py`
-
-Da sua `ModerationTools` de dung shared predictor.
-
-Thay doi cu the:
-
-- Bo load tokenizer/model rieng trong agent.
-- Bo hard-code inference rieng trong `classify_text`.
-- Dung `load_hf_artifacts()` khi khoi tao.
-- Dung `predict_with_artifacts()` khi classify.
-- Threshold borderline doc tu env `BORDERLINE_LOW`, `BORDERLINE_HIGH`.
-
-Ly do sua:
-
-- Agent va API truoc do co the dua ra ket qua khac nhau cho cung mot text neu logic drift.
-
-### 3.7. `src/evaluation/evaluate.py`
-
-Da bo sung metric day du hon.
-
-Truoc do co:
-
-- macro F1;
-- per-class F1;
-- classification report;
-- confusion matrix;
-- optional AUC.
-
-Da them:
-
-- accuracy;
-- precision macro;
-- recall macro;
-- weighted F1;
-- recall hate speech;
-- `zero_division=0`;
-- labels co dinh `[0, 1, 2]`.
-
-Ly do sua:
-
-- Accuracy cao khong du de ket luan voi dataset mat can bang.
-- Can theo doi macro F1 va recall cua class HATE.
-
-### 3.8. `src/models/classifier.py`
-
-Da cap nhat `compute_metrics()` cho Hugging Face Trainer.
-
-Da them:
-
-- accuracy;
-- precision macro;
-- recall macro;
-- weighted F1;
-- zero division handling.
-
-Ly do sua:
-
-- Training/evaluation trong Trainer can metric phu hop hon chi macro F1/per-class F1.
-
-### 3.9. `src/evaluation/manual_tests.py`
-
-File moi de chay manual robustness tests.
-
-Bao gom 30 test cases cho:
-
-- doi chu ngu;
-- keyword bias;
-- hate speech ngam;
-- cau trung lap;
-- phu dinh hate speech.
-
-Output markdown co bang:
-
-```markdown
-| text | expected | predicted | confidence | probabilities | pass | category |
-```
-
-Lenh chay lai:
+Build:
 
 ```bash
-python -m src.evaluation.manual_tests --model-source thong7d/vihsd-xlmr-hate-speech
+docker build -t hate-speech-api .
 ```
 
-Trang thai hien tai:
+Run:
 
-- Da tao `results/manual_test_report.md`.
-- Chua co prediction that vi moi truong `.venv` hien tai thieu `torch`.
+```bash
+docker run -p 8000:8000 hate-speech-api
+```
 
-### 3.10. `notebooks/03_preprocessing.ipynb`
+Compose:
 
-Da sua Cell 1.
+```bash
+docker compose up --build
+```
 
-Truoc do:
-
-- Dinh nghia `clean_text` truc tiep trong notebook.
-- Ghi parquet voi cot `text`, `label_id`.
-- Tinh class weights trong notebook.
-
-Sau khi sua:
-
-- Import tu `data.preprocessing`.
-- Ghi parquet canonical voi cot `text`, `label`.
-- Tinh class weights tu train split only.
-- Luu class weights theo path `cfg.results.class_weights`.
-
-Loi duoc fix:
-
-- Schema mismatch `label_id` vs `label`.
-
-### 3.11. `notebooks/04_baseline.ipynb`
-
-Da sua Cell 1.
-
-Truoc do:
-
-- Doc config sai bang cac key khong ton tai nhu `raw_data`, `processed_data`, `results`.
-- Tao path sai, dan den file la:
+Healthcheck:
 
 ```text
-{project_root}/results/class_weights.json/baseline_report.json
+GET http://localhost:8000/health
 ```
 
-Sau khi sua:
+## 9. CI/CD
 
-- Dung `OmegaConf`.
-- Dung `cfg.data.train_processed`, `cfg.data.val_processed`.
-- Dung `cfg.models.baseline`.
-- Dung `cfg.results.baseline_report`.
-- Luu baseline report day du hon gom:
-  - evaluated split;
-  - macro F1;
-  - classification report;
-  - confusion matrix.
+Workflow da them:
 
-### 3.12. `notebooks/05_finetune.ipynb`
+- `.github/workflows/ci.yml`
+  - checkout
+  - setup Python 3.10
+  - install `requirements-dev.txt`
+  - `ruff check .`
+  - `pytest`
+  - import API
 
-Da sua resolve path.
+- `.github/workflows/docker.yml`
+  - build Docker image
+  - run container
+  - call `/health`
 
-Truoc do:
+CI khong train model nang va khong download dataset lon.
 
-- `resolve_path()` chi thay `{drive_root}`.
-- Trong `configs/paths.yaml` hien tai lai dung `{project_root}`.
+## 10. Test
 
-Sau khi sua:
-
-```python
-return template_path.replace("{project_root}", PROJECT_ROOT).replace("{drive_root}", DRIVE_ROOT)
-```
-
-Ly do sua:
-
-- Fine-tuning notebook co the load sai path hoac giu nguyen literal `{project_root}`.
-
-## 4. File report da tao
-
-### 4.1. `results/evaluation_report.md`
-
-Noi dung:
-
-- tom tat thay doi;
-- loi phat hien;
-- file da chinh sua;
-- tinh trang data quality;
-- tinh trang evaluation;
-- ket luan ky thuat;
-- viec can lam tiep theo.
-
-Luu y:
-
-- Khong tu bia metric.
-- Vi local environment thieu data/model/dependency, report ghi ro `Khong du du lieu de xac minh`.
-
-### 4.2. `results/manual_test_report.md`
-
-Noi dung:
-
-- 30 manual test cases;
-- expected label;
-- predicted label;
-- confidence;
-- probabilities;
-- pass/fail;
-- category.
-
-Trang thai hien tai:
-
-- Prediction la `N/A` do chua load duoc model trong local environment vi thieu `torch`.
-
-### 4.3. `results/data_quality_report.md`
-
-Noi dung:
-
-- report trang thai moi truong;
-- thong bao thieu dependency.
-
-Trang thai hien tai:
-
-- Chua co du lieu local va dependency can thiet nen chua xac minh duoc duplicate/overlap/class distribution.
-
-## 5. Kiem tra da chay
-
-Da chay compile check:
+Lenh chay:
 
 ```bash
-.venv/Scripts/python.exe -m py_compile src/data/preprocessing.py src/data/quality.py src/evaluation/classifier.py src/evaluation/evaluate.py src/evaluation/manual_tests.py src/api/app.py src/api/schemas.py src/agent/moderator.py src/models/classifier.py
+pytest
+```
+
+Trang thai verification da chay trong moi truong hien tai:
+
+```text
+python -m compileall -q src tests
 ```
 
 Ket qua:
 
 ```text
-OK
+passed
 ```
 
-Da kiem tra notebook JSON parse:
+Smoke checks da chay:
 
-```bash
-python - <<'PY'
-import json
-from pathlib import Path
-for path in Path("notebooks").glob("*.ipynb"):
-    json.loads(path.read_text(encoding="utf-8"))
-print("notebook json ok")
-PY
-```
+- load YAML config: passed
+- preprocessing helper: passed
+- label mapping helper: passed
+- compute metrics helper: passed
 
-Ket qua:
+Chua chay duoc `pytest` vi moi truong hien tai chua co `pytest`.
+
+Chua import duoc FastAPI app bang moi truong hien tai vi chua co `fastapi`.
 
 ```text
-notebook json ok
+Khong du du lieu de xac minh
 ```
 
-Da chay manual test script:
+## 11. Cach train tren Colab
 
-```bash
-.venv/Scripts/python.exe -m src.evaluation.manual_tests --output results/manual_test_report.md
-```
-
-Ket qua:
+Mo:
 
 ```text
-Manual test rows: 30
-Report written to results/manual_test_report.md
+notebooks/train_colab.ipynb
 ```
 
-Nhung prediction la `N/A` vi thieu `torch`.
+Thiet lap Colab secret:
 
-## 6. Nhung dieu chua the ket luan
+```text
+HF_TOKEN
+```
 
-Chua the ket luan bang so lieu that:
-
-- accuracy cu co dang tin khong;
-- model co keyword bias khong;
-- model co loi doi chu ngu khong;
-- model co phan biet duoc phu dinh nhu `I do not hate anyone` khong;
-- model co overfit/underfit khong;
-- confusion matrix that;
-- macro F1/weighted F1/recall HATE that.
-
-Ly do:
-
-- Repo local khong co `data/processed/train.parquet`, `dev.parquet`, `test.parquet`.
-- Repo local khong co model checkpoint/final model.
-- `.venv` hien tai thieu dependency quan trong nhu `pandas`, `omegaconf`, `torch`.
-
-## 7. Cach chay tiep de co bao cao that
-
-Sau khi cai dependency:
+Pipeline:
 
 ```bash
-pip install -r requirements.txt
+python -m src.training.train --config configs/train.yaml
+python -m src.evaluation.evaluate --config configs/train.yaml
+python -m src.export.export_model --config configs/train.yaml --push-to-hub
+python -m src.evaluation.manual_tests --config configs/model.yaml
 ```
 
-Chay lai pipeline:
+## 12. Cach chay local API
 
 ```bash
-python -m src.data.quality
-python -m src.evaluation.manual_tests --model-source thong7d/vihsd-xlmr-hate-speech
+pip install -r requirements-deploy.txt
+uvicorn src.api.app:app --host 0.0.0.0 --port 8000
 ```
 
-Neu dung notebook:
+Hoac:
 
-1. Chay `notebooks/03_preprocessing.ipynb`.
-2. Chay `notebooks/04_baseline.ipynb`.
-3. Chay `notebooks/05_finetune.ipynb`.
-4. Chay `notebooks/06_evaluation.ipynb`.
-5. Chay manual tests.
+```bash
+make run-api
+```
 
-## 8. Ket luan
+## 13. Ket luan ky thuat
 
-Da refactor project theo huong:
-
-- preprocessing co ham dung chung;
-- inference co ham dung chung;
-- API va agent thong nhat prediction;
-- evaluation khong dua vao accuracy don le;
-- manual robustness tests san sang de bat loi doi chu ngu, negation va keyword bias;
-- report khong tu tao so lieu khi moi truong chua du de xac minh.
+- Project da tach train/deploy ro rang.
+- Notebook Colab chi con la wrapper, khong con la noi chua logic chinh.
+- API production khong phu thuoc Colab.
+- Model co the load tu Hugging Face Hub hoac fallback tu local artifact.
+- Label mapping duoc gom ve `src/models/registry.py`, khong hard-code rai rac.
+- Training va inference dung chung preprocessing qua `preprocess_text()`.
+- CI/CD kiem tra lint, tests, API import va Docker healthcheck.
+- Can lam tiep:
+  - Cai dev dependencies de chay `pytest` that.
+  - Train model tren Colab de tao artifact that.
+  - Chay evaluation that de sinh `metrics.json`.
+  - Push artifact len Hugging Face Hub voi `HF_TOKEN`.

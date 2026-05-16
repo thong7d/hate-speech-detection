@@ -1,63 +1,20 @@
-# docker-compose.yml
-# ============================================================
-# Single-process deployment: FastAPI + Gradio on one port (8000).
-#
-# Endpoints after startup:
-#   http://localhost:8000/docs   — Swagger API documentation
-#   http://localhost:8000/ui     — Gradio web demo
-#   http://localhost:8000/predict — REST API
-#   http://localhost:8000/health  — Health check (used by Docker)
-#
-# Usage:
-#   docker compose up --build       # first run (~5-10 min build)
-#   docker compose up               # subsequent runs (cached)
-#   docker compose down             # stop
-#   docker compose down -v          # stop + delete model cache
-# ============================================================
-
 services:
-  vihsd-api:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: vihsd-hate-speech:latest
-    container_name: vihsd-api
-
+  api:
+    build: .
+    image: hate-speech-api:latest
     ports:
-      - "8000:8000"    # Single port: API + Gradio UI
-
-    volumes:
-      - ./.hf_cache:/tmp/hf_cache   # Persist model weights locally
-
-    env_file:
-      - .env
-
+      - "8000:8000"
     environment:
-      HF_MODEL_ID: "thong7d/vihsd-xlmr-hate-speech"
-
-      TRANSFORMERS_CACHE: "/tmp/hf_cache"
+      MODEL_SOURCE: "huggingface"
+      HF_REPO_ID: "quanghs1020/hate-speech-detection"
+      MODEL_LOCAL_PATH: "artifacts/hate_speech_model/model"
       HF_HOME: "/tmp/hf_cache"
-
-      API_HOST: "0.0.0.0"
-      API_PORT: "8000"
-      MAX_LENGTH: "128"
-      BORDERLINE_LOW: "0.35"
-      BORDERLINE_HIGH: "0.65"
-
-      TOKENIZERS_PARALLELISM: "false"
-
-    deploy:
-      resources:
-        limits:
-          memory: 4G
-
-    restart: unless-stopped
-
+      TRANSFORMERS_CACHE: "/tmp/hf_cache"
+    volumes:
+      - ./.hf_cache:/tmp/hf_cache
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 90s
-
-
+      start_period: 30s

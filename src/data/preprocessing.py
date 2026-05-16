@@ -28,6 +28,11 @@ def clean_text(text: object) -> str:
     return " ".join(text.split())
 
 
+def preprocess_text(text: object) -> str:
+    """Public alias used by both training and production inference."""
+    return clean_text(text)
+
+
 def resolve_project_path(template_path: str, project_root: str | Path = ".") -> Path:
     """Resolve paths that contain the literal {project_root} placeholder."""
     return Path(str(template_path).replace("{project_root}", str(project_root))).resolve()

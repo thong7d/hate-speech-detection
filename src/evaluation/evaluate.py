@@ -1,72 +1,119 @@
-"""
-Standardized evaluation utilities for ViHSD models.
-"""
-import json
-import os
-import shutil
-import tempfile
-import numpy as np
-from sklearn.metrics import (
-    accuracy_score,
-    classification_report,
-    confusion_matrix,
-    f1_score,
-    precision_score,
-    recall_score,
-    roc_auc_score,
-)
+from __future__ import annotations
 
-LABEL_NAMES = ["CLEAN", "OFFENSIVE", "HATE"]
+import argparse
+from pathlib import Path
+from typing import Any
 
-def compute_full_metrics(y_true, y_pred, y_prob=None):
-    labels = list(range(len(LABEL_NAMES)))
-    report = classification_report(
-        y_true,
-        y_pred,
-        labels=labels,
-        target_names=LABEL_NAMES,
-        output_dict=True,
-        zero_division=0,
+try:
+    from src.data.preprocessing import normalize_text_label_frame
+    from src.evaluation.metrics import compute_classification_metrics, write_json
+    from src.models.classifier import HateSpeechClassifier
+    from src.models.registry import label2id_from_mapping
+    from src.utils.config import load_yaml_config, resolve_path
+except ImportError:
+    from data.preprocessing import normalize_text_label_frame
+    from evaluation.metrics import compute_classification_metrics, write_json
+    from models.classifier import HateSpeechClassifier
+    from models.registry import label2id_from_mapping
+    from utils.config import load_yaml_config, resolve_path
+
+
+INSUFFICIENT = "Khong du du lieu de xac minh"
+
+
+def evaluate_from_config(config: dict[str, Any]) -> dict[str, Any]:
+    data_cfg = config["data"]
+    evaluation_cfg = config["evaluation"]
+    export_cfg = config["export"]
+    model_cfg = config["model"]
+
+    metrics_path = resolve_path(evaluation_cfg["metrics_output_path"])
+    report_path = resolve_path(evaluation_cfg["report_output_path"])
+    test_path = resolve_path(data_cfg["test_path"])
+    final_model_dir = resolve_path(export_cfg["final_model_dir"])
+
+    if not test_path.exists() or not final_model_dir.exists():
+        payload = {"status": INSUFFICIENT, "reason": "missing test split or model artifact"}
+        write_json(metrics_path, payload)
+        _write_report(report_path, payload)
+        return payload
+
+    import pandas as pd
+
+    df = pd.read_parquet(test_path) if test_path.suffix.lower() == ".parquet" else pd.read_csv(test_path)
+    canonical = normalize_text_label_frame(
+        df,
+        text_column=data_cfg.get("text_column"),
+        label_column=data_cfg.get("label_column"),
     )
-    cm = confusion_matrix(y_true, y_pred, labels=labels).tolist()
-    f1_macro = f1_score(y_true, y_pred, labels=labels, average="macro", zero_division=0)
-    f1_weighted = f1_score(y_true, y_pred, labels=labels, average="weighted", zero_division=0)
-    precision_macro = precision_score(y_true, y_pred, labels=labels, average="macro", zero_division=0)
-    recall_macro = recall_score(y_true, y_pred, labels=labels, average="macro", zero_division=0)
-    f1_per_class = f1_score(y_true, y_pred, labels=labels, average=None, zero_division=0).tolist()
+    classifier = HateSpeechClassifier(
+        model_source="local",
+        model_path=str(final_model_dir),
+        artifact_dir=export_cfg["artifact_dir"],
+        max_length=int(model_cfg.get("max_length", 128)),
+    )
+    label2id = label2id_from_mapping(classifier.label_mapping)
+    predictions = classifier.predict_batch(canonical["text"].tolist())
+    y_true = canonical["label"].astype(int).tolist()
+    y_pred = [label2id[pred["label"]] for pred in predictions]
+    label_names = [classifier.id2label[idx] for idx in sorted(classifier.id2label)]
+    labels = list(range(len(label_names)))
 
-    result = {
-        "accuracy": round(accuracy_score(y_true, y_pred), 4),
-        "precision_macro": round(precision_macro, 4),
-        "recall_macro": round(recall_macro, 4),
-        "macro_f1": round(f1_macro, 4),
-        "weighted_f1": round(f1_weighted, 4),
-        "recall_hate_speech": round(report["HATE"]["recall"], 4),
-        "f1_per_class": {name: round(f1, 4) for name, f1 in zip(LABEL_NAMES, f1_per_class)},
-        "classification_report": report,
-        "confusion_matrix": cm,
-    }
+    metrics = compute_classification_metrics(y_true, y_pred, labels=labels, label_names=label_names)
+    write_json(metrics_path, metrics)
+    _write_report(report_path, metrics)
+    _write_confusion_matrix(resolve_path(evaluation_cfg["confusion_matrix_path"]), metrics, label_names)
+    return metrics
 
-    if y_prob is not None:
-        try:
-            auc = roc_auc_score(y_true, y_prob, multi_class="ovr", average="macro")
-            result["auc_roc_macro"] = round(auc, 4)
-        except ValueError:
-            result["auc_roc_macro"] = None
 
-    return result
+def _write_report(path: Path, metrics: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = ["# Evaluation Report", ""]
+    if metrics.get("status") == INSUFFICIENT:
+        lines.extend([INSUFFICIENT, "", f"Reason: {metrics.get('reason', INSUFFICIENT)}"])
+    else:
+        lines.extend(
+            [
+                f"- Accuracy: {metrics['accuracy']}",
+                f"- Macro F1: {metrics['macro_f1']}",
+                f"- Weighted F1: {metrics['weighted_f1']}",
+                "",
+                "## Confusion Matrix",
+                "",
+                "```text",
+                str(metrics["confusion_matrix"]),
+                "```",
+            ]
+        )
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-def save_metrics_atomic(metrics: dict, filepath: str):
-    dir_path = os.path.dirname(filepath)
-    os.makedirs(dir_path, exist_ok=True)
 
-    fd, tmp_path = tempfile.mkstemp(dir=dir_path, suffix=".json")
+def _write_confusion_matrix(path: Path, metrics: dict[str, Any], label_names: list[str]) -> None:
+    if "confusion_matrix" not in metrics:
+        return
     try:
-        with os.fdopen(fd, "w") as f:
-            json.dump(metrics, f, indent=2, ensure_ascii=False)
-        # BẢN VÁ: Dùng shutil.move thay cho os.replace để tránh lỗi Cross-device link trên Drive
-        shutil.move(tmp_path, filepath, copy_function=shutil.copy2)
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        plt.figure(figsize=(6, 5))
+        sns.heatmap(metrics["confusion_matrix"], annot=True, fmt="d", xticklabels=label_names, yticklabels=label_names)
+        plt.xlabel("Predicted")
+        plt.ylabel("True")
+        plt.tight_layout()
+        plt.savefig(path)
+        plt.close()
     except Exception:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
-        raise
+        pass
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Evaluate the exported hate speech model.")
+    parser.add_argument("--config", default="configs/train.yaml")
+    args = parser.parse_args()
+    metrics = evaluate_from_config(load_yaml_config(args.config))
+    print(metrics)
+
+
+if __name__ == "__main__":
+    main()
