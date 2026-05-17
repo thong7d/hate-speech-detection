@@ -22,14 +22,18 @@ training:
   learning_rate: 2.0e-5
   batch_size: 16
   eval_batch_size: 32
-  num_epochs: 3
+  num_epochs: 5
   weight_decay: 0.01
   metric_for_best_model: "macro_f1"
   greater_is_better: true
   save_total_limit: 2
   early_stopping_patience: 2
   fp16: true
-  class_weighting: "sqrt_balanced"
+  class_weighting: "manual"
+  class_weights:
+    CLEAN: 1.0
+    OFFENSIVE: 1.5
+    HATE: 1.2
 
 evaluation:
   metrics_output_path: "artifacts/hate_speech_model/metrics.json"

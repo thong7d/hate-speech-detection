@@ -27,8 +27,8 @@ def compute_metrics(eval_pred: tuple[np.ndarray, np.ndarray]) -> dict[str, float
     preds = np.argmax(logits, axis=-1)
     labels = np.asarray(labels).reshape(-1)
     preds = np.asarray(preds).reshape(-1)
-    label_ids = sorted(set(labels.tolist()) | set(preds.tolist()))
-    return {
+    label_ids = list(range(len(DEFAULT_LABELS)))
+    metrics = {
         "accuracy": float(round(accuracy_score(labels, preds), 4)),
         "precision_macro": round(
             float(precision_score(labels, preds, labels=label_ids, average="macro", zero_division=0)), 4
@@ -41,6 +41,14 @@ def compute_metrics(eval_pred: tuple[np.ndarray, np.ndarray]) -> dict[str, float
             float(f1_score(labels, preds, labels=label_ids, average="weighted", zero_division=0)), 4
         ),
     }
+    precision = precision_score(labels, preds, labels=label_ids, average=None, zero_division=0)
+    recall = recall_score(labels, preds, labels=label_ids, average=None, zero_division=0)
+    f1 = f1_score(labels, preds, labels=label_ids, average=None, zero_division=0)
+    for idx, label in enumerate(DEFAULT_LABELS):
+        metrics[f"precision_{label}"] = round(float(precision[idx]), 4)
+        metrics[f"recall_{label}"] = round(float(recall[idx]), 4)
+        metrics[f"f1_{label}"] = round(float(f1[idx]), 4)
+    return metrics
 
 
 class HateSpeechClassifier:

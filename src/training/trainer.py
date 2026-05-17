@@ -158,13 +158,32 @@ def _class_weights_from_training_config(
     if mode in {"", "none", "false", "off"}:
         return None
 
+    manual_weights = training_cfg.get("class_weights") or {}
+    if mode == "manual":
+        if not isinstance(manual_weights, dict):
+            raise ValueError("training.class_weights must be a mapping when class_weighting is manual")
+        return _manual_class_weights(manual_weights, num_labels)
+
     weights_by_id = compute_balanced_class_weights(labels, num_labels)
     weights = [float(weights_by_id[idx]) for idx in range(num_labels)]
     if mode == "balanced":
         return weights
     if mode == "sqrt_balanced":
         return [weight**0.5 for weight in weights]
-    raise ValueError("training.class_weighting must be one of: none, balanced, sqrt_balanced")
+    raise ValueError("training.class_weighting must be one of: none, balanced, sqrt_balanced, manual")
+
+
+def _manual_class_weights(raw_weights: dict[str, Any], num_labels: int) -> list[float]:
+    label_names = ["CLEAN", "OFFENSIVE", "HATE"]
+    weights: list[float] = []
+    for idx in range(num_labels):
+        label = label_names[idx] if idx < len(label_names) else str(idx)
+        raw_value = raw_weights.get(label, raw_weights.get(str(idx), 1.0))
+        weight = float(raw_value)
+        if weight <= 0:
+            raise ValueError(f"class weight for {label} must be positive")
+        weights.append(weight)
+    return weights
 
 
 def _weighted_trainer_class(base_trainer):
