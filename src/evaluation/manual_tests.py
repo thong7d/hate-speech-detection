@@ -12,27 +12,27 @@ except ImportError:
     from utils.config import load_yaml_config
 
 
-UNKNOWN_EXPECTED = "Khong du du lieu de xac minh expected label"
-
 TEST_CASES = [
-    ("I hate this group.", "subject_change"),
-    ("You hate this group.", "subject_change"),
-    ("They hate this group.", "subject_change"),
-    ("He hates this group.", "subject_change"),
-    ("She hates this group.", "subject_change"),
-    ("People hate this group.", "subject_change"),
-    ("This article discusses hate speech.", "keyword_context"),
-    ("The word is offensive, but I am quoting it for analysis.", "keyword_context"),
-    ("He explained why discrimination is harmful.", "keyword_context"),
-    ("The dataset contains toxic words.", "keyword_context"),
-    ("We should stop racism and hate speech.", "keyword_context"),
-    ("I do not hate anyone.", "negation"),
-    ("We should not attack people because of their identity.", "negation"),
-    ("No group deserves discrimination.", "negation"),
-    ("Hate speech should be prevented.", "negation"),
-    ("Those people should not be allowed here.", "implicit_hate"),
-    ("They do not belong in our country.", "implicit_hate"),
-    ("I went to school today.", "neutral"),
+    ("Hom nay troi dep, toi di hoc cung ban.", "CLEAN", "neutral"),
+    ("Bai viet nay phan tich hien tuong ky thi tren mang.", "CLEAN", "neutral"),
+    ("Chung ta nen ton trong su khac biet cua moi nguoi.", "CLEAN", "neutral"),
+    ("Toi khong ghet ai ca.", "CLEAN", "negation"),
+    ("Khong ai dang bi xuc pham trong cau nay.", "CLEAN", "negation"),
+    ("Khong nen cong kich nguoi khac vi gioi tinh hay que quan.", "CLEAN", "negation"),
+    ("Can ngan chan loi noi thu han tren mang xa hoi.", "CLEAN", "keyword_context"),
+    ("Tu ngu do rat xuc pham, nhung toi dang trich dan de phan tich.", "CLEAN", "keyword_context"),
+    ("Bao cao nay noi ve viec phat hien ngon tu thu ghet.", "CLEAN", "keyword_context"),
+    ("May noi chuyen ngu that.", "OFFENSIVE", "direct_insult"),
+    ("Thang nay dung la do vo hoc.", "OFFENSIVE", "direct_insult"),
+    ("Con nho do noi nang mat day.", "OFFENSIVE", "direct_insult"),
+    ("Bai viet cua may nham nhi va rac ruoi.", "OFFENSIVE", "direct_insult"),
+    ("Lu do khong nen duoc song o day.", "HATE", "group_attack"),
+    ("Duoi het bon do ra khoi dat nuoc nay.", "HATE", "group_attack"),
+    ("Nhung nguoi nhu vay khong xung dang co quyen loi.", "HATE", "group_attack"),
+    ("Cam cho cai nhom do di hoc va di lam.", "HATE", "group_attack"),
+    ("Tui no la mam benh cua xa hoi.", "HATE", "dehumanization"),
+    ("Loai nguoi do chi lam ban cong dong.", "HATE", "dehumanization"),
+    ("Khong cho bon do xuat hien o khu nay nua.", "HATE", "exclusion"),
 ]
 
 
@@ -46,27 +46,30 @@ def run_manual_tests(config_path: str = "configs/model.yaml", output_path: str =
     except Exception as exc:
         load_error = str(exc)
 
-    for text, category in TEST_CASES:
+    for text, expected, category in TEST_CASES:
         if classifier is None:
             rows.append(
                 {
                     "text": text,
-                    "expected": UNKNOWN_EXPECTED,
+                    "expected": expected,
                     "predicted": "N/A",
                     "confidence": "N/A",
                     "probabilities": "N/A",
+                    "pass": "N/A",
                     "category": category,
                 }
             )
             continue
         pred = classifier.predict(text)
+        predicted = pred["label"]
         rows.append(
             {
                 "text": text,
-                "expected": UNKNOWN_EXPECTED,
-                "predicted": pred["label"],
+                "expected": expected,
+                "predicted": predicted,
                 "confidence": f"{pred['confidence']:.4f}",
                 "probabilities": json.dumps(pred["probabilities"], ensure_ascii=False, sort_keys=True),
+                "pass": "yes" if predicted == expected else "no",
                 "category": category,
             }
         )
@@ -82,15 +85,21 @@ def build_markdown_report(rows: list[dict], *, load_error: str | None = None) ->
     lines = ["# Manual Robustness Test Report", ""]
     if load_error:
         lines.extend(["Khong du du lieu de xac minh", "", f"Model load error: `{load_error}`", ""])
-    lines.extend(["| text | expected | predicted | confidence | probabilities | category |", "|---|---|---|---:|---|---|"])
+    lines.extend(
+        [
+            "| text | expected | predicted | confidence | probabilities | pass | category |",
+            "|---|---|---|---:|---|---|---|",
+        ]
+    )
     for row in rows:
         lines.append(
-            "| {text} | {expected} | {predicted} | {confidence} | {probabilities} | {category} |".format(
+            "| {text} | {expected} | {predicted} | {confidence} | {probabilities} | {pass_} | {category} |".format(
                 text=row["text"].replace("|", "\\|"),
                 expected=row["expected"],
                 predicted=row["predicted"],
                 confidence=row["confidence"],
                 probabilities=str(row["probabilities"]).replace("|", "\\|"),
+                pass_=row["pass"],
                 category=row["category"],
             )
         )
