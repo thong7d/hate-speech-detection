@@ -13,6 +13,7 @@ try:
     from src.data.preprocessing import compute_balanced_class_weights, normalize_text_label_frame
     from src.models.classifier import compute_metrics
     from src.models.registry import build_label_mapping, label2id_from_mapping, save_label_mapping
+    from src.training.robustness_cases import build_robustness_frame
     from src.utils.config import resolve_path
     from src.utils.seed import set_seed
 except ImportError:
@@ -20,6 +21,7 @@ except ImportError:
     from data.preprocessing import compute_balanced_class_weights, normalize_text_label_frame
     from models.classifier import compute_metrics
     from models.registry import build_label_mapping, label2id_from_mapping, save_label_mapping
+    from training.robustness_cases import build_robustness_frame
     from utils.config import resolve_path
     from utils.seed import set_seed
 
@@ -51,6 +53,12 @@ def train_from_config(config: dict[str, Any]) -> dict[str, Any]:
     train_df = _load_frame(data_cfg["train_path"], data_cfg)
     valid_df = _load_frame(data_cfg["valid_path"], data_cfg)
     num_labels = int(model_cfg.get("num_labels") or len(label_mapping["id2label"]))
+    train_df, augmentation_summary = _augment_training_frame(
+        train_df,
+        training_cfg,
+        label2id,
+        seed=seed,
+    )
 
     tokenizer = AutoTokenizer.from_pretrained(model_cfg["base_model"], trust_remote_code=False)
     model = AutoModelForSequenceClassification.from_pretrained(
@@ -84,6 +92,7 @@ def train_from_config(config: dict[str, Any]) -> dict[str, Any]:
         greater_is_better=bool(training_cfg.get("greater_is_better", True)),
         save_total_limit=int(training_cfg.get("save_total_limit", 2)),
         fp16=bool(training_cfg.get("fp16", False)),
+        max_grad_norm=float(training_cfg.get("max_grad_norm", 1.0)),
         report_to=[],
         seed=seed,
     )
@@ -95,10 +104,18 @@ def train_from_config(config: dict[str, Any]) -> dict[str, Any]:
             )
         )
 
-    trainer_cls = _weighted_trainer_class(Trainer) if class_weights else Trainer
+    loss_name = str(training_cfg.get("loss", "cross_entropy")).lower()
+    focal_gamma = float(training_cfg.get("focal_gamma", 0.0))
+    trainer_cls = _custom_loss_trainer_class(Trainer) if class_weights or loss_name == "focal" else Trainer
     trainer_kwargs = {}
-    if class_weights:
-        trainer_kwargs["class_weights"] = class_weights
+    if trainer_cls is not Trainer:
+        trainer_kwargs.update(
+            {
+                "class_weights": class_weights,
+                "loss_name": loss_name,
+                "focal_gamma": focal_gamma,
+            }
+        )
 
     trainer = trainer_cls(
         model=model,
@@ -133,8 +150,11 @@ def train_from_config(config: dict[str, Any]) -> dict[str, Any]:
             "label_column": data_cfg.get("label_column", "label"),
         },
         "best_checkpoint": trainer.state.best_model_checkpoint,
+        "loss": loss_name,
+        "focal_gamma": focal_gamma if loss_name == "focal" else None,
         "class_weighting": training_cfg.get("class_weighting", "none"),
         "class_weights": class_weights,
+        "robustness_augmentation": augmentation_summary,
     }
     _write_json(artifact_dir / "metadata.json", metadata)
     _write_json(resolve_path(config["evaluation"]["metrics_output_path"]), metrics)
@@ -146,6 +166,33 @@ def train_from_config(config: dict[str, Any]) -> dict[str, Any]:
         "final_model_dir": str(final_model_dir),
         "metrics": metrics,
         "metadata": metadata,
+    }
+
+
+def _augment_training_frame(
+    train_df: pd.DataFrame,
+    training_cfg: dict[str, Any],
+    label2id: dict[str, int],
+    *,
+    seed: int,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    augmentation_cfg = training_cfg.get("robustness_augmentation") or {}
+    if not augmentation_cfg or not bool(augmentation_cfg.get("enabled", False)):
+        return train_df, {"enabled": False}
+
+    repeats = int(augmentation_cfg.get("repeats", 1))
+    if repeats <= 0:
+        return train_df, {"enabled": False, "reason": "repeats <= 0"}
+
+    robustness_df, summary = build_robustness_frame(label2id)
+    repeated_frames = [robustness_df.copy() for _ in range(repeats)]
+    augmented = pd.concat([train_df, *repeated_frames], ignore_index=True)
+    augmented = augmented.sample(frac=1, random_state=seed).reset_index(drop=True)
+    return augmented, {
+        "enabled": True,
+        "repeats": repeats,
+        "added_examples": int(len(robustness_df) * repeats),
+        **summary,
     }
 
 
@@ -186,24 +233,48 @@ def _manual_class_weights(raw_weights: dict[str, Any], num_labels: int) -> list[
     return weights
 
 
-def _weighted_trainer_class(base_trainer):
-    class WeightedTrainer(base_trainer):
-        def __init__(self, *args, class_weights: list[float], **kwargs) -> None:
+def _custom_loss_trainer_class(base_trainer):
+    class CustomLossTrainer(base_trainer):
+        def __init__(
+            self,
+            *args,
+            class_weights: list[float] | None,
+            loss_name: str,
+            focal_gamma: float,
+            **kwargs,
+        ) -> None:
             super().__init__(*args, **kwargs)
             self.class_weights = class_weights
+            self.loss_name = loss_name
+            self.focal_gamma = focal_gamma
 
         def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
             import torch
+            import torch.nn.functional as F
 
             labels = inputs.pop("labels")
             outputs = model(**inputs)
             logits = outputs.logits
-            weights = torch.tensor(self.class_weights, dtype=logits.dtype, device=logits.device)
-            loss_fct = torch.nn.CrossEntropyLoss(weight=weights)
-            loss = loss_fct(logits.view(-1, model.config.num_labels), labels.view(-1))
+            logits = logits.view(-1, model.config.num_labels)
+            labels = labels.view(-1)
+            weights = None
+            if self.class_weights:
+                weights = torch.tensor(self.class_weights, dtype=logits.dtype, device=logits.device)
+
+            if self.loss_name == "focal":
+                log_probs = F.log_softmax(logits, dim=-1)
+                nll = -log_probs.gather(dim=-1, index=labels.unsqueeze(1)).squeeze(1)
+                pt = torch.exp(-nll)
+                if weights is not None:
+                    nll = nll * weights.gather(0, labels)
+                loss = ((1 - pt) ** self.focal_gamma * nll).mean()
+            elif self.loss_name in {"cross_entropy", "ce"}:
+                loss = F.cross_entropy(logits, labels, weight=weights)
+            else:
+                raise ValueError("training.loss must be one of: cross_entropy, focal")
             return (loss, outputs) if return_outputs else loss
 
-    return WeightedTrainer
+    return CustomLossTrainer
 
 
 def _load_frame(path: str, data_cfg: dict[str, Any]) -> pd.DataFrame:
