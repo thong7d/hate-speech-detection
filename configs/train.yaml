@@ -29,6 +29,7 @@ training:
   save_total_limit: 2
   early_stopping_patience: 2
   fp16: true
+  class_weighting: "sqrt_balanced"
 
 evaluation:
   metrics_output_path: "artifacts/hate_speech_model/metrics.json"

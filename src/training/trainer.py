@@ -10,14 +10,14 @@ import pandas as pd
 
 try:
     from src.data.dataset import ViHSDDataset
-    from src.data.preprocessing import normalize_text_label_frame
+    from src.data.preprocessing import compute_balanced_class_weights, normalize_text_label_frame
     from src.models.classifier import compute_metrics
     from src.models.registry import build_label_mapping, label2id_from_mapping, save_label_mapping
     from src.utils.config import resolve_path
     from src.utils.seed import set_seed
 except ImportError:
     from data.dataset import ViHSDDataset
-    from data.preprocessing import normalize_text_label_frame
+    from data.preprocessing import compute_balanced_class_weights, normalize_text_label_frame
     from models.classifier import compute_metrics
     from models.registry import build_label_mapping, label2id_from_mapping, save_label_mapping
     from utils.config import resolve_path
@@ -64,6 +64,7 @@ def train_from_config(config: dict[str, Any]) -> dict[str, Any]:
     max_length = int(model_cfg.get("max_length", 128))
     train_dataset = ViHSDDataset(train_df["text"].tolist(), train_df["label"].tolist(), tokenizer, max_length)
     valid_dataset = ViHSDDataset(valid_df["text"].tolist(), valid_df["label"].tolist(), tokenizer, max_length)
+    class_weights = _class_weights_from_training_config(training_cfg, train_df["label"].tolist(), num_labels)
 
     output_dir = resolve_path(training_cfg["output_dir"])
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -94,7 +95,12 @@ def train_from_config(config: dict[str, Any]) -> dict[str, Any]:
             )
         )
 
-    trainer = Trainer(
+    trainer_cls = _weighted_trainer_class(Trainer) if class_weights else Trainer
+    trainer_kwargs = {}
+    if class_weights:
+        trainer_kwargs["class_weights"] = class_weights
+
+    trainer = trainer_cls(
         model=model,
         args=args,
         train_dataset=train_dataset,
@@ -102,6 +108,7 @@ def train_from_config(config: dict[str, Any]) -> dict[str, Any]:
         tokenizer=tokenizer,
         compute_metrics=compute_metrics,
         callbacks=callbacks,
+        **trainer_kwargs,
     )
 
     trainer.train()
@@ -126,6 +133,8 @@ def train_from_config(config: dict[str, Any]) -> dict[str, Any]:
             "label_column": data_cfg.get("label_column", "label"),
         },
         "best_checkpoint": trainer.state.best_model_checkpoint,
+        "class_weighting": training_cfg.get("class_weighting", "none"),
+        "class_weights": class_weights,
     }
     _write_json(artifact_dir / "metadata.json", metadata)
     _write_json(resolve_path(config["evaluation"]["metrics_output_path"]), metrics)
@@ -138,6 +147,44 @@ def train_from_config(config: dict[str, Any]) -> dict[str, Any]:
         "metrics": metrics,
         "metadata": metadata,
     }
+
+
+def _class_weights_from_training_config(
+    training_cfg: dict[str, Any],
+    labels: list[int],
+    num_labels: int,
+) -> list[float] | None:
+    mode = str(training_cfg.get("class_weighting", "none")).lower()
+    if mode in {"", "none", "false", "off"}:
+        return None
+
+    weights_by_id = compute_balanced_class_weights(labels, num_labels)
+    weights = [float(weights_by_id[idx]) for idx in range(num_labels)]
+    if mode == "balanced":
+        return weights
+    if mode == "sqrt_balanced":
+        return [weight**0.5 for weight in weights]
+    raise ValueError("training.class_weighting must be one of: none, balanced, sqrt_balanced")
+
+
+def _weighted_trainer_class(base_trainer):
+    class WeightedTrainer(base_trainer):
+        def __init__(self, *args, class_weights: list[float], **kwargs) -> None:
+            super().__init__(*args, **kwargs)
+            self.class_weights = class_weights
+
+        def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+            import torch
+
+            labels = inputs.pop("labels")
+            outputs = model(**inputs)
+            logits = outputs.logits
+            weights = torch.tensor(self.class_weights, dtype=logits.dtype, device=logits.device)
+            loss_fct = torch.nn.CrossEntropyLoss(weight=weights)
+            loss = loss_fct(logits.view(-1, model.config.num_labels), labels.view(-1))
+            return (loss, outputs) if return_outputs else loss
+
+    return WeightedTrainer
 
 
 def _load_frame(path: str, data_cfg: dict[str, Any]) -> pd.DataFrame:
