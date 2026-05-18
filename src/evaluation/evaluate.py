@@ -77,6 +77,8 @@ def _write_report(path: Path, metrics: dict[str, Any]) -> None:
                 f"- Accuracy: {metrics['accuracy']}",
                 f"- Macro F1: {metrics['macro_f1']}",
                 f"- Weighted F1: {metrics['weighted_f1']}",
+                f"- Critical F1: {metrics.get('critical_f1', 'N/A')}",
+                f"- Offensive Priority F1: {metrics.get('offensive_priority_f1', 'N/A')}",
                 "",
                 "## Per-Class Metrics",
                 "",

@@ -22,12 +22,22 @@ def compute_classification_metrics(
         output_dict=True,
         zero_division=0,
     )
+    per_class_f1 = f1_score(y_true, y_pred, labels=labels, average=None, zero_division=0)
+    per_class_recall = recall_score(y_true, y_pred, labels=labels, average=None, zero_division=0)
+    offensive_idx = label_names.index("OFFENSIVE") if "OFFENSIVE" in label_names else 1
+    hate_idx = label_names.index("HATE") if "HATE" in label_names else 2
     return {
         "accuracy": round(accuracy_score(y_true, y_pred), 4),
         "precision_macro": round(precision_score(y_true, y_pred, labels=labels, average="macro", zero_division=0), 4),
         "recall_macro": round(recall_score(y_true, y_pred, labels=labels, average="macro", zero_division=0), 4),
         "macro_f1": round(f1_score(y_true, y_pred, labels=labels, average="macro", zero_division=0), 4),
         "weighted_f1": round(f1_score(y_true, y_pred, labels=labels, average="weighted", zero_division=0), 4),
+        "critical_f1": round(float((per_class_f1[offensive_idx] + per_class_f1[hate_idx]) / 2), 4),
+        "critical_recall": round(float((per_class_recall[offensive_idx] + per_class_recall[hate_idx]) / 2), 4),
+        "offensive_priority_f1": round(float((0.7 * per_class_f1[offensive_idx]) + (0.3 * per_class_f1[hate_idx])), 4),
+        "offensive_priority_recall": round(
+            float((0.7 * per_class_recall[offensive_idx]) + (0.3 * per_class_recall[hate_idx])), 4
+        ),
         "classification_report": report,
         "confusion_matrix": confusion_matrix(y_true, y_pred, labels=labels).tolist(),
     }

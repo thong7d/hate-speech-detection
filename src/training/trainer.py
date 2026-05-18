@@ -53,6 +53,12 @@ def train_from_config(config: dict[str, Any]) -> dict[str, Any]:
     train_df = _load_frame(data_cfg["train_path"], data_cfg)
     valid_df = _load_frame(data_cfg["valid_path"], data_cfg)
     num_labels = int(model_cfg.get("num_labels") or len(label_mapping["id2label"]))
+    train_df, oversampling_summary = _oversample_training_frame(
+        train_df,
+        training_cfg,
+        label2id,
+        seed=seed,
+    )
     train_df, augmentation_summary = _augment_training_frame(
         train_df,
         training_cfg,
@@ -154,6 +160,7 @@ def train_from_config(config: dict[str, Any]) -> dict[str, Any]:
         "focal_gamma": focal_gamma if loss_name == "focal" else None,
         "class_weighting": training_cfg.get("class_weighting", "none"),
         "class_weights": class_weights,
+        "class_oversampling": oversampling_summary,
         "robustness_augmentation": augmentation_summary,
     }
     _write_json(artifact_dir / "metadata.json", metadata)
@@ -166,6 +173,53 @@ def train_from_config(config: dict[str, Any]) -> dict[str, Any]:
         "final_model_dir": str(final_model_dir),
         "metrics": metrics,
         "metadata": metadata,
+    }
+
+
+def _oversample_training_frame(
+    train_df: pd.DataFrame,
+    training_cfg: dict[str, Any],
+    label2id: dict[str, int],
+    *,
+    seed: int,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    oversampling_cfg = training_cfg.get("class_oversampling") or {}
+    if not oversampling_cfg or not bool(oversampling_cfg.get("enabled", False)):
+        return train_df, {"enabled": False}
+
+    multipliers = oversampling_cfg.get("multipliers") or {}
+    if not isinstance(multipliers, dict):
+        raise ValueError("training.class_oversampling.multipliers must be a mapping")
+
+    extra_frames = []
+    added_by_label: dict[str, int] = {}
+    for label, label_id in label2id.items():
+        multiplier = float(multipliers.get(label, multipliers.get(str(label_id), 1.0)))
+        if multiplier <= 0:
+            raise ValueError(f"class oversampling multiplier for {label} must be positive")
+        if multiplier <= 1.0:
+            continue
+
+        label_rows = train_df[train_df["label"] == int(label_id)]
+        if label_rows.empty:
+            continue
+        extra_count = int(round((multiplier - 1.0) * len(label_rows)))
+        if extra_count <= 0:
+            continue
+        extra = label_rows.sample(n=extra_count, replace=True, random_state=seed + int(label_id) + 1009)
+        extra_frames.append(extra)
+        added_by_label[label] = int(extra_count)
+
+    if not extra_frames:
+        return train_df, {"enabled": True, "added_examples": 0, "added_by_label": {}}
+
+    augmented = pd.concat([train_df, *extra_frames], ignore_index=True)
+    augmented = augmented.sample(frac=1, random_state=seed).reset_index(drop=True)
+    return augmented, {
+        "enabled": True,
+        "added_examples": int(sum(added_by_label.values())),
+        "added_by_label": added_by_label,
+        "multipliers": multipliers,
     }
 
 
