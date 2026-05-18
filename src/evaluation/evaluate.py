@@ -78,14 +78,62 @@ def _write_report(path: Path, metrics: dict[str, Any]) -> None:
                 f"- Macro F1: {metrics['macro_f1']}",
                 f"- Weighted F1: {metrics['weighted_f1']}",
                 "",
+                "## Per-Class Metrics",
+                "",
+                "| Class | Precision | Recall | F1 | Support |",
+                "|---|---:|---:|---:|---:|",
+                *_classification_report_lines(metrics),
+                "",
                 "## Confusion Matrix",
                 "",
                 "```text",
                 str(metrics["confusion_matrix"]),
                 "```",
+                "",
+                "## Error Counts",
+                "",
+                *_error_count_lines(metrics),
             ]
         )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _classification_report_lines(metrics: dict[str, Any]) -> list[str]:
+    report = metrics.get("classification_report") or {}
+    rows = []
+    for label, values in report.items():
+        if not isinstance(values, dict) or label in {"macro avg", "weighted avg"}:
+            continue
+        rows.append(
+            "| {label} | {precision:.4f} | {recall:.4f} | {f1:.4f} | {support:.0f} |".format(
+                label=label,
+                precision=float(values.get("precision", 0)),
+                recall=float(values.get("recall", 0)),
+                f1=float(values.get("f1-score", 0)),
+                support=float(values.get("support", 0)),
+            )
+        )
+    return rows
+
+
+def _error_count_lines(metrics: dict[str, Any]) -> list[str]:
+    report = metrics.get("classification_report") or {}
+    labels = [
+        label
+        for label, values in report.items()
+        if isinstance(values, dict) and label not in {"macro avg", "weighted avg"}
+    ]
+    matrix = metrics.get("confusion_matrix") or []
+    if not labels or not matrix:
+        return ["Khong du du lieu de xac minh"]
+
+    lines = ["| Expected | Missed as CLEAN | Predicted as toxic from CLEAN |", "|---|---:|---:|"]
+    clean_idx = labels.index("CLEAN") if "CLEAN" in labels else 0
+    for idx, label in enumerate(labels):
+        missed_as_clean = int(matrix[idx][clean_idx]) if idx != clean_idx else 0
+        clean_to_label = int(matrix[clean_idx][idx]) if idx != clean_idx else 0
+        lines.append(f"| {label} | {missed_as_clean} | {clean_to_label} |")
+    return lines
 
 
 def _write_confusion_matrix(path: Path, metrics: dict[str, Any], label_names: list[str]) -> None:

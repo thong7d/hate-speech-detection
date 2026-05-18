@@ -39,7 +39,7 @@ training:
     HATE: 1.6
   robustness_augmentation:
     enabled: true
-    repeats: 12
+    repeats: 8
 
 evaluation:
   metrics_output_path: "artifacts/hate_speech_model/metrics.json"

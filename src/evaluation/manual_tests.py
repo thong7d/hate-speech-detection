@@ -6,34 +6,25 @@ from pathlib import Path
 
 try:
     from src.models.classifier import HateSpeechClassifier
+    from src.training.robustness_cases import (
+        ROBUSTNESS_HOLDOUT_CASES,
+        ROBUSTNESS_TRAIN_CASES,
+        normalized_case_texts,
+        summarize_cases,
+    )
     from src.utils.config import load_yaml_config
 except ImportError:
     from models.classifier import HateSpeechClassifier
+    from training.robustness_cases import (
+        ROBUSTNESS_HOLDOUT_CASES,
+        ROBUSTNESS_TRAIN_CASES,
+        normalized_case_texts,
+        summarize_cases,
+    )
     from utils.config import load_yaml_config
 
 
-TEST_CASES = [
-    ("Hom nay troi dep, toi di hoc cung ban.", "CLEAN", "neutral"),
-    ("Bai viet nay phan tich hien tuong ky thi tren mang.", "CLEAN", "neutral"),
-    ("Chung ta nen ton trong su khac biet cua moi nguoi.", "CLEAN", "neutral"),
-    ("Toi khong ghet ai ca.", "CLEAN", "negation"),
-    ("Khong ai dang bi xuc pham trong cau nay.", "CLEAN", "negation"),
-    ("Khong nen cong kich nguoi khac vi gioi tinh hay que quan.", "CLEAN", "negation"),
-    ("Can ngan chan loi noi thu han tren mang xa hoi.", "CLEAN", "keyword_context"),
-    ("Tu ngu do rat xuc pham, nhung toi dang trich dan de phan tich.", "CLEAN", "keyword_context"),
-    ("Bao cao nay noi ve viec phat hien ngon tu thu ghet.", "CLEAN", "keyword_context"),
-    ("May noi chuyen ngu that.", "OFFENSIVE", "direct_insult"),
-    ("Thang nay dung la do vo hoc.", "OFFENSIVE", "direct_insult"),
-    ("Con nho do noi nang mat day.", "OFFENSIVE", "direct_insult"),
-    ("Bai viet cua may nham nhi va rac ruoi.", "OFFENSIVE", "direct_insult"),
-    ("Lu do khong nen duoc song o day.", "HATE", "group_attack"),
-    ("Duoi het bon do ra khoi dat nuoc nay.", "HATE", "group_attack"),
-    ("Nhung nguoi nhu vay khong xung dang co quyen loi.", "HATE", "group_attack"),
-    ("Cam cho cai nhom do di hoc va di lam.", "HATE", "group_attack"),
-    ("Tui no la mam benh cua xa hoi.", "HATE", "dehumanization"),
-    ("Loai nguoi do chi lam ban cong dong.", "HATE", "dehumanization"),
-    ("Khong cho bon do xuat hien o khu nay nua.", "HATE", "exclusion"),
-]
+TEST_CASES = ROBUSTNESS_HOLDOUT_CASES
 
 
 def run_manual_tests(config_path: str = "configs/model.yaml", output_path: str = "results/manual_test_report.md") -> list[dict]:
@@ -83,6 +74,23 @@ def run_manual_tests(config_path: str = "configs/model.yaml", output_path: str =
 
 def build_markdown_report(rows: list[dict], *, load_error: str | None = None) -> str:
     lines = ["# Manual Robustness Test Report", ""]
+    overlap = _training_overlap(TEST_CASES)
+    lines.extend(
+        [
+            "## Summary",
+            "",
+            f"- Total cases: {len(rows)}",
+            f"- Passed cases: {sum(1 for row in rows if row['pass'] == 'yes')}",
+            f"- Exact overlap with train augmentation: {len(overlap)}",
+            "",
+        ]
+    )
+    lines.extend(_summary_lines(rows))
+    lines.append("")
+    if overlap:
+        lines.extend(["## Overlap Warning", ""])
+        lines.extend(f"- {text}" for text in overlap)
+        lines.append("")
     if load_error:
         lines.extend(["Khong du du lieu de xac minh", "", f"Model load error: `{load_error}`", ""])
     lines.extend(
@@ -104,6 +112,38 @@ def build_markdown_report(rows: list[dict], *, load_error: str | None = None) ->
             )
         )
     return "\n".join(lines) + "\n"
+
+
+def _summary_lines(rows: list[dict]) -> list[str]:
+    case_summary = summarize_cases(TEST_CASES)
+    lines = [
+        "### Case Distribution",
+        "",
+        "| Label | Cases |",
+        "|---|---:|",
+    ]
+    for label, count in sorted(case_summary["label_counts"].items()):
+        lines.append(f"| {label} | {count} |")
+
+    lines.extend(["", "### Category Accuracy", "", "| Category | Passed | Total | Accuracy |", "|---|---:|---:|---:|"])
+    categories = sorted({row["category"] for row in rows})
+    for category in categories:
+        category_rows = [row for row in rows if row["category"] == category]
+        passed = sum(1 for row in category_rows if row["pass"] == "yes")
+        total = len(category_rows)
+        accuracy = passed / total if total else 0
+        lines.append(f"| {category} | {passed} | {total} | {accuracy:.2%} |")
+    return lines
+
+
+def _training_overlap(cases: list[tuple[str, str, str]]) -> list[str]:
+    train_texts = normalized_case_texts(ROBUSTNESS_TRAIN_CASES)
+    overlap = []
+    for text, _label, _category in cases:
+        normalized = " ".join(text.lower().split())
+        if normalized in train_texts:
+            overlap.append(text)
+    return overlap
 
 
 def main() -> None:
