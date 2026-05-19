@@ -45,6 +45,12 @@ training:
   robustness_augmentation:
     enabled: true
     repeats: 7
+  contrastive_augmentation:
+    enabled: true
+    repeats: 6
+  diacritic_augmentation:
+    enabled: true
+    repeats: 4
 
 evaluation:
   metrics_output_path: "artifacts/hate_speech_model/metrics.json"

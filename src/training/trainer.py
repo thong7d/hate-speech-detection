@@ -13,7 +13,7 @@ try:
     from src.data.preprocessing import compute_balanced_class_weights, normalize_text_label_frame
     from src.models.classifier import compute_metrics
     from src.models.registry import build_label_mapping, label2id_from_mapping, save_label_mapping
-    from src.training.robustness_cases import build_robustness_frame
+    from src.training.robustness_cases import build_contrastive_frame, build_diacritic_frame, build_robustness_frame
     from src.utils.config import resolve_path
     from src.utils.seed import set_seed
 except ImportError:
@@ -21,7 +21,7 @@ except ImportError:
     from data.preprocessing import compute_balanced_class_weights, normalize_text_label_frame
     from models.classifier import compute_metrics
     from models.registry import build_label_mapping, label2id_from_mapping, save_label_mapping
-    from training.robustness_cases import build_robustness_frame
+    from training.robustness_cases import build_contrastive_frame, build_diacritic_frame, build_robustness_frame
     from utils.config import resolve_path
     from utils.seed import set_seed
 
@@ -60,6 +60,18 @@ def train_from_config(config: dict[str, Any]) -> dict[str, Any]:
         seed=seed,
     )
     train_df, augmentation_summary = _augment_training_frame(
+        train_df,
+        training_cfg,
+        label2id,
+        seed=seed,
+    )
+    train_df, contrastive_summary = _augment_contrastive_frame(
+        train_df,
+        training_cfg,
+        label2id,
+        seed=seed,
+    )
+    train_df, diacritic_summary = _augment_diacritic_frame(
         train_df,
         training_cfg,
         label2id,
@@ -162,6 +174,8 @@ def train_from_config(config: dict[str, Any]) -> dict[str, Any]:
         "class_weights": class_weights,
         "class_oversampling": oversampling_summary,
         "robustness_augmentation": augmentation_summary,
+        "contrastive_augmentation": contrastive_summary,
+        "diacritic_augmentation": diacritic_summary,
     }
     _write_json(artifact_dir / "metadata.json", metadata)
     _write_json(resolve_path(config["evaluation"]["metrics_output_path"]), metrics)
@@ -246,6 +260,60 @@ def _augment_training_frame(
         "enabled": True,
         "repeats": repeats,
         "added_examples": int(len(robustness_df) * repeats),
+        **summary,
+    }
+
+
+def _augment_contrastive_frame(
+    train_df: pd.DataFrame,
+    training_cfg: dict[str, Any],
+    label2id: dict[str, int],
+    *,
+    seed: int,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    augmentation_cfg = training_cfg.get("contrastive_augmentation") or {}
+    if not augmentation_cfg or not bool(augmentation_cfg.get("enabled", False)):
+        return train_df, {"enabled": False}
+
+    repeats = int(augmentation_cfg.get("repeats", 1))
+    if repeats <= 0:
+        return train_df, {"enabled": False, "reason": "repeats <= 0"}
+
+    contrastive_df, summary = build_contrastive_frame(label2id)
+    repeated_frames = [contrastive_df.copy() for _ in range(repeats)]
+    augmented = pd.concat([train_df, *repeated_frames], ignore_index=True)
+    augmented = augmented.sample(frac=1, random_state=seed + 1701).reset_index(drop=True)
+    return augmented, {
+        "enabled": True,
+        "repeats": repeats,
+        "added_examples": int(len(contrastive_df) * repeats),
+        **summary,
+    }
+
+
+def _augment_diacritic_frame(
+    train_df: pd.DataFrame,
+    training_cfg: dict[str, Any],
+    label2id: dict[str, int],
+    *,
+    seed: int,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    augmentation_cfg = training_cfg.get("diacritic_augmentation") or {}
+    if not augmentation_cfg or not bool(augmentation_cfg.get("enabled", False)):
+        return train_df, {"enabled": False}
+
+    repeats = int(augmentation_cfg.get("repeats", 1))
+    if repeats <= 0:
+        return train_df, {"enabled": False, "reason": "repeats <= 0"}
+
+    diacritic_df, summary = build_diacritic_frame(label2id)
+    repeated_frames = [diacritic_df.copy() for _ in range(repeats)]
+    augmented = pd.concat([train_df, *repeated_frames], ignore_index=True)
+    augmented = augmented.sample(frac=1, random_state=seed + 2401).reset_index(drop=True)
+    return augmented, {
+        "enabled": True,
+        "repeats": repeats,
+        "added_examples": int(len(diacritic_df) * repeats),
         **summary,
     }
 

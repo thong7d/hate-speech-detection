@@ -7,6 +7,10 @@ from pathlib import Path
 try:
     from src.models.classifier import HateSpeechClassifier
     from src.training.robustness_cases import (
+        CONTRASTIVE_HOLDOUT_CASES,
+        CONTRASTIVE_TRAIN_CASES,
+        DIACRITIC_HOLDOUT_CASES,
+        DIACRITIC_TRAIN_CASES,
         ROBUSTNESS_HOLDOUT_CASES,
         ROBUSTNESS_TRAIN_CASES,
         normalized_case_texts,
@@ -16,6 +20,10 @@ try:
 except ImportError:
     from models.classifier import HateSpeechClassifier
     from training.robustness_cases import (
+        CONTRASTIVE_HOLDOUT_CASES,
+        CONTRASTIVE_TRAIN_CASES,
+        DIACRITIC_HOLDOUT_CASES,
+        DIACRITIC_TRAIN_CASES,
         ROBUSTNESS_HOLDOUT_CASES,
         ROBUSTNESS_TRAIN_CASES,
         normalized_case_texts,
@@ -24,7 +32,7 @@ except ImportError:
     from utils.config import load_yaml_config
 
 
-TEST_CASES = ROBUSTNESS_HOLDOUT_CASES
+TEST_CASES = ROBUSTNESS_HOLDOUT_CASES + CONTRASTIVE_HOLDOUT_CASES + DIACRITIC_HOLDOUT_CASES
 
 
 def run_manual_tests(config_path: str = "configs/model.yaml", output_path: str = "results/manual_test_report.md") -> list[dict]:
@@ -137,7 +145,7 @@ def _summary_lines(rows: list[dict]) -> list[str]:
 
 
 def _training_overlap(cases: list[tuple[str, str, str]]) -> list[str]:
-    train_texts = normalized_case_texts(ROBUSTNESS_TRAIN_CASES)
+    train_texts = normalized_case_texts(ROBUSTNESS_TRAIN_CASES + CONTRASTIVE_TRAIN_CASES + DIACRITIC_TRAIN_CASES)
     overlap = []
     for text, _label, _category in cases:
         normalized = " ".join(text.lower().split())
