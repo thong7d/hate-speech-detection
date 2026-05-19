@@ -24,7 +24,7 @@ training:
   eval_batch_size: 32
   num_epochs: 5
   weight_decay: 0.01
-  metric_for_best_model: "offensive_priority_f1"
+  metric_for_best_model: "balanced_critical_f1"
   greater_is_better: true
   save_total_limit: 2
   early_stopping_patience: 2
@@ -35,16 +35,16 @@ training:
   class_weighting: "manual"
   class_weights:
     CLEAN: 1.0
-    OFFENSIVE: 2.0
-    HATE: 1.35
+    OFFENSIVE: 1.9
+    HATE: 1.5
   class_oversampling:
     enabled: true
     multipliers:
-      OFFENSIVE: 1.7
-      HATE: 1.1
+      OFFENSIVE: 1.5
+      HATE: 1.15
   robustness_augmentation:
     enabled: true
-    repeats: 8
+    repeats: 7
 
 evaluation:
   metrics_output_path: "artifacts/hate_speech_model/metrics.json"

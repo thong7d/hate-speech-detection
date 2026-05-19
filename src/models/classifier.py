@@ -52,6 +52,10 @@ def compute_metrics(eval_pred: tuple[np.ndarray, np.ndarray]) -> dict[str, float
     metrics["critical_recall"] = round(float((recall[1] + recall[2]) / 2), 4)
     metrics["offensive_priority_f1"] = round(float((0.7 * f1[1]) + (0.3 * f1[2])), 4)
     metrics["offensive_priority_recall"] = round(float((0.7 * recall[1]) + (0.3 * recall[2])), 4)
+    metrics["balanced_critical_f1"] = round(float((0.4 * f1[1]) + (0.4 * f1[2]) + (0.2 * metrics["macro_f1"])), 4)
+    metrics["balanced_critical_recall"] = round(
+        float((0.4 * recall[1]) + (0.4 * recall[2]) + (0.2 * metrics["recall_macro"])), 4
+    )
     return metrics
 
 
