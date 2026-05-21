@@ -94,4 +94,4 @@ export:
   artifact_dir: "artifacts/hate_speech_model"
   final_model_dir: "artifacts/hate_speech_model/model"
   push_to_hub: false
-  hf_repo_id: "quanghs1020/hate-speech-detection"
+  hf_repo_id: "thong7d/vihsd-phobert-hate-speech"

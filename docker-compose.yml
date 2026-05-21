@@ -6,7 +6,7 @@ services:
       - "8000:8000"
     environment:
       MODEL_SOURCE: "huggingface"
-      HF_REPO_ID: "quanghs1020/hate-speech-detection"
+      HF_REPO_ID: "thong7d/vihsd-xlmr-hate-speech"
       MODEL_LOCAL_PATH: "artifacts/hate_speech_model/model"
       HF_HOME: "/tmp/hf_cache"
       TRANSFORMERS_CACHE: "/tmp/hf_cache"

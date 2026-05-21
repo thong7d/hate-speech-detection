@@ -40,7 +40,7 @@ logs:
   agent_events:      "{project_root}/logs/agent_events.jsonl"
 
 # --- HuggingFace Hub (cloud model storage) ---
-hf_model_id: "quanghs1020/hate-speech-detection"
+hf_model_id: "thong7d/vihsd-phobert-hate-speech"
 hf_cache: "/tmp/hf_cache"
 
 # --- Model architecture ---
