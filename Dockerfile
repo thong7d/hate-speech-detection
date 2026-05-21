@@ -24,7 +24,8 @@ ENV API_HOST=0.0.0.0 \
     API_PORT=8000 \
     MODEL_SOURCE=huggingface \
     HF_REPO_ID=quanghs1020/hate-speech-detection \
-    MODEL_LOCAL_PATH=artifacts/hate_speech_model/model
+    MODEL_LOCAL_PATH=artifacts/hate_speech_model/model \
+    TOKENIZERS_PARALLELISM=false
 
 EXPOSE 8000
 

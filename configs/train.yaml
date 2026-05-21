@@ -9,7 +9,7 @@ data:
   label_column: "label"
 
 model:
-  base_model: "xlm-roberta-base"
+  base_model: "vinai/phobert-base-v2"
   num_labels: 3
   max_length: 128
   labels:
@@ -17,31 +17,54 @@ model:
     - "OFFENSIVE"
     - "HATE"
 
+preprocessing:
+  use_word_segmentation: true
+  normalize_teencode: true
+  normalize_repeated_chars: true
+  unicode_normalize: true
+  min_text_length: 3
+
 training:
   output_dir: "artifacts/hate_speech_model/checkpoint"
-  learning_rate: 1.5e-5
+  learning_rate: 2.0e-5
   batch_size: 16
   eval_batch_size: 32
-  num_epochs: 5
+  num_epochs: 10
   weight_decay: 0.01
+  warmup_ratio: 0.1
   metric_for_best_model: "balanced_critical_f1"
   greater_is_better: true
   save_total_limit: 2
-  early_stopping_patience: 2
-  fp16: false
+  early_stopping_patience: 3
+  fp16: true
   max_grad_norm: 1.0
+
+  # --- Loss function ---
   loss: "focal"
-  focal_gamma: 1.5
+  focal_gamma: 2.0
+  label_smoothing: 0.1
+
+  # --- Layer-wise learning rate decay ---
+  layerwise_lr_decay: 0.95
+
+  # --- Gradient accumulation (effective batch = batch_size * steps) ---
+  gradient_accumulation_steps: 2
+
+  # --- Class weighting ---
   class_weighting: "manual"
   class_weights:
     CLEAN: 1.0
     OFFENSIVE: 1.9
     HATE: 1.5
+
+  # --- Oversampling minority classes ---
   class_oversampling:
     enabled: true
     multipliers:
       OFFENSIVE: 1.5
       HATE: 1.15
+
+  # --- Data augmentation ---
   robustness_augmentation:
     enabled: true
     repeats: 7
@@ -51,12 +74,21 @@ training:
   diacritic_augmentation:
     enabled: true
     repeats: 4
+  eda_augmentation:
+    enabled: true
+    alpha_rd: 0.15
+    alpha_rs: 0.1
+    num_aug_per_sample: 2
+    target_labels:
+      - "OFFENSIVE"
+      - "HATE"
 
 evaluation:
   metrics_output_path: "artifacts/hate_speech_model/metrics.json"
   report_output_path: "results/evaluation_report.md"
   confusion_matrix_path: "results/confusion_matrix.png"
   loss_curve_path: "results/loss_curve.png"
+  error_analysis_path: "results/error_analysis.csv"
 
 export:
   artifact_dir: "artifacts/hate_speech_model"

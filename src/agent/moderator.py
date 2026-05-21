@@ -1,6 +1,13 @@
+"""
+Gemini-powered content moderation agent with tool usage.
+
+Implements the Agentic AI component:
+  1. Multi-step reasoning via Gemini LLM
+  2. Tool usage: classify_text, detect_language, log_event
+  3. Dynamic decision-making: borderline texts get clarifying questions
+"""
 import os
 import json
-import time
 import hashlib
 from datetime import datetime
 from typing import Optional
@@ -9,9 +16,11 @@ from langdetect import detect as langdetect_detect
 import google.generativeai as genai
 
 try:
-    from evaluation.classifier import load_hf_artifacts, predict_with_artifacts
+    from src.models.classifier import HateSpeechClassifier
+    from src.data.preprocessing import preprocess_text
 except ImportError:
-    from src.evaluation.classifier import load_hf_artifacts, predict_with_artifacts
+    from models.classifier import HateSpeechClassifier
+    from data.preprocessing import preprocess_text
 
 
 # ========== TOOL IMPLEMENTATIONS ==========
@@ -22,49 +31,48 @@ class ModerationTools:
     Each tool has a clear input/output contract.
     """
 
-    def __init__(self, model_source: str, log_path: str, device: str = "auto"):
+    def __init__(self, model_source: str, log_path: str, device: str = "auto",
+                 use_word_segmentation: bool = True):
         """
         Args:
             model_source: HF model ID or local path to the fine-tuned model.
-            log_path: Path to the JSONL log file on Drive.
+            log_path: Path to the JSONL log file.
             device: 'cuda', 'cpu', or 'auto'.
+            use_word_segmentation: Whether to use Vietnamese word segmentation.
         """
         self.log_path = log_path
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
 
-        hf_token = os.environ.get("HF_TOKEN")
-        self.artifacts = load_hf_artifacts(
-            model_source,
-            token=hf_token,
+        # Use unified HateSpeechClassifier instead of separate load_hf_artifacts
+        self.classifier = HateSpeechClassifier(
+            model_source="huggingface",
+            hf_repo_id=model_source,
             device=device,
-            max_length=int(os.environ.get("MAX_LENGTH", "128")),
+            use_word_segmentation=use_word_segmentation,
         )
-        self.device = self.artifacts.device
+
         self.borderline_low = float(os.environ.get("BORDERLINE_LOW", "0.35"))
         self.borderline_high = float(os.environ.get("BORDERLINE_HIGH", "0.65"))
-        print(f"✅ ModerationTools initialized on {self.device}")
+        print(f"✅ ModerationTools initialized on {self.classifier.device}")
 
     def classify_text(self, text: str) -> dict:
         """
         Tool 1: Classify text for hate speech using the fine-tuned model.
 
         Input:  text (str) — the text to classify
-        Output: dict with keys: label, label_id, confidence, scores, is_borderline
+        Output: dict with keys: label, confidence, scores, is_borderline
         """
-        result = predict_with_artifacts(
-            self.artifacts,
-            text,
-            borderline_low=self.borderline_low,
-            borderline_high=self.borderline_high,
-            preprocess=True,
-        )
+        result = self.classifier.predict(text)
+        confidence = result["confidence"]
         return {
             "label": result["label"],
-            "label_id": result["label_id"],
-            "confidence": result["confidence"],
-            "scores": result["scores"],
+            "label_id": list(self.classifier.id2label.keys())[
+                list(self.classifier.id2label.values()).index(result["label"])
+            ],
+            "confidence": confidence,
+            "scores": result["probabilities"],
             "probabilities": result["probabilities"],
-            "is_borderline": result["is_borderline"],
+            "is_borderline": self.borderline_low <= confidence <= self.borderline_high,
         }
 
     def detect_language(self, text: str) -> dict:
@@ -84,9 +92,6 @@ class ModerationTools:
                   confidence: float = 0.0, language: str = "vi"):
         """
         Tool 3: Log a moderation event to JSONL file (privacy-safe).
-
-        Input:  text (for hashing only), label, action, reason, confidence, language
-        Output: Event appended to JSONL log file. Returns confirmation dict.
 
         Privacy: Only the SHA-256 hash prefix of the text is stored, not the raw text.
         """
@@ -150,12 +155,12 @@ class ContentModerator:
     """
 
     def __init__(self, tools: ModerationTools, gemini_api_key: str,
-                 gemini_model: str = "gemini-1.5-flash"):
+                 gemini_model: str = "gemini-2.0-flash"):
         """
         Args:
             tools: ModerationTools instance with loaded model.
             gemini_api_key: Google Gemini API key.
-            gemini_model: Gemini model name (default: gemini-1.5-flash).
+            gemini_model: Gemini model name.
         """
         self.tools = tools
 

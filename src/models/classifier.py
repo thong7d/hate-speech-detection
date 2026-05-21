@@ -72,6 +72,7 @@ class HateSpeechClassifier:
         threshold: float = 0.5,
         max_length: int = 128,
         device: str = "auto",
+        use_word_segmentation: bool = True,
     ) -> None:
         self.model_source = model_source
         self.hf_repo_id = hf_repo_id
@@ -82,6 +83,7 @@ class HateSpeechClassifier:
         self.threshold = threshold
         self.max_length = max_length
         self.device_name = device
+        self.use_word_segmentation = use_word_segmentation
         self.model = None
         self.tokenizer = None
         self.device = None
@@ -107,11 +109,12 @@ class HateSpeechClassifier:
             metadata_path=model_cfg.get("metadata_path"),
             threshold=float(model_cfg.get("threshold", 0.5)),
             max_length=int(model_cfg.get("max_length", 128)),
+            use_word_segmentation=bool(model_cfg.get("use_word_segmentation", True)),
         )
 
     @property
     def model_version(self) -> str:
-        return str(self.metadata.get("model_version") or self.metadata.get("version") or "v1.0.0")
+        return str(self.metadata.get("model_version") or self.metadata.get("version") or "v2.0.0")
 
     def predict(self, text: str) -> dict:
         if self.model is None or self.tokenizer is None or self.device is None:
@@ -120,7 +123,7 @@ class HateSpeechClassifier:
         import torch
 
         original_text = "" if text is None else str(text)
-        model_text = preprocess_text(original_text)
+        model_text = preprocess_text(original_text, use_word_segmentation=self.use_word_segmentation)
         encoding = self.tokenizer(
             model_text,
             max_length=self.max_length,
@@ -211,7 +214,7 @@ class HateSpeechClassifier:
             with self.metadata_path.open("r", encoding="utf-8") as f:
                 return json.load(f)
         return {
-            "model_version": "v1.0.0",
+            "model_version": "v2.0.0",
             "note": "Khong du du lieu de xac minh metadata artifact.",
         }
 

@@ -28,6 +28,7 @@ class ModelArtifacts:
     device: torch.device
     label_map: dict[int, str]
     max_length: int = 128
+    use_word_segmentation: bool = True
 
 
 def normalize_label_map(label_map: Mapping | None, num_labels: int = 3) -> dict[int, str]:
@@ -63,6 +64,7 @@ def load_hf_artifacts(
     device: str | torch.device = "auto",
     max_length: int = 128,
     label_map: Mapping | None = None,
+    use_word_segmentation: bool = True,
 ) -> ModelArtifacts:
     """Load tokenizer/model and return a ready-to-use inference bundle."""
     from transformers import AutoModelForSequenceClassification, AutoTokenizer
@@ -89,6 +91,7 @@ def load_hf_artifacts(
         device=resolved_device,
         label_map=labels,
         max_length=max_length,
+        use_word_segmentation=use_word_segmentation,
     )
 
 
@@ -103,12 +106,13 @@ def predict_text(
     borderline_low: float = 0.35,
     borderline_high: float = 0.65,
     preprocess: bool = True,
+    use_word_segmentation: bool = True,
 ) -> dict:
     """Classify one text sample and return label, confidence, and probabilities."""
     labels = normalize_label_map(label_map, num_labels=len(label_map or DEFAULT_LABEL_MAP))
     resolved_device = torch.device(device)
     original_text = text
-    model_text = clean_text(text) if preprocess else str(text)
+    model_text = clean_text(text, use_word_segmentation=use_word_segmentation) if preprocess else str(text)
 
     model.eval()
     encoding = tokenizer(
@@ -161,6 +165,7 @@ def predict_with_artifacts(
         borderline_low=borderline_low,
         borderline_high=borderline_high,
         preprocess=preprocess,
+        use_word_segmentation=artifacts.use_word_segmentation,
     )
 
 

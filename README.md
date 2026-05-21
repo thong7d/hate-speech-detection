@@ -2,18 +2,23 @@
 
 ## 1. Overview
 
-This project trains and serves a hate speech detection model. Training is designed for Google Colab, while local and production environments focus on API serving, tests, Docker, and CI/CD.
+An end-to-end Vietnamese hate speech detection system built on **PhoBERT (vinai/phobert-base-v2)** fine-tuned on the **ViHSD** dataset (~33,400 comments, 3 classes: CLEAN / OFFENSIVE / HATE).
 
-The production flow is:
+The system includes:
+- **FastAPI REST API** for real-time inference
+- **Gemini-powered content moderation agent** with multi-step reasoning
+- **Gradio web demo** for interactive testing
+- **Docker** support for containerized deployment
+
+### Architecture
 
 ```text
-notebooks/train_colab.ipynb
-  -> src.training.train
-  -> src.evaluation.evaluate
-  -> src.export.export_model
-  -> Hugging Face Hub
-  -> FastAPI production
-  -> Docker + CI/CD
+Raw Vietnamese Text
+  → Preprocessing (Unicode norm, teencode, word segmentation)
+  → PhoBERT Fine-tuned Classifier
+  → FastAPI REST API
+  → Gemini Agent (multi-step reasoning, tool usage)
+  → Gradio / HF Spaces Demo
 ```
 
 ## 2. Project Structure
@@ -23,28 +28,41 @@ configs/                 YAML config for training, model loading, and API
 notebooks/train_colab.ipynb
 notebooks/archive/       legacy notebooks kept for reference
 src/api/                 FastAPI app, schemas, dependencies
-src/data/                dataset and shared preprocessing
-src/training/            Trainer entry point
-src/evaluation/          metrics and manual robustness tests
+src/data/                dataset, preprocessing, augmentation
+src/training/            Trainer entry point + custom loss/LLRD
+src/evaluation/          metrics, error analysis, manual robustness tests
 src/export/              artifact export and Hugging Face upload
 src/models/              inference class and label mapping registry
+src/agent/               Gemini-based content moderator
 tests/                   pytest coverage for API/config/inference/preprocessing
 .github/workflows/       CI and Docker workflows
 ```
 
-## 3. Local Setup
+## 3. Key Improvements (v2.0)
+
+| Feature | v1 (XLM-R) | v2 (PhoBERT) |
+|---|---|---|
+| Backbone | xlm-roberta-base | **vinai/phobert-base-v2** |
+| Preprocessing | Basic (URL, mention) | **+Unicode NFKC, +teencode norm, +repeated chars, +word segmentation** |
+| Augmentation | Robustness cases | **+EDA, +diacritic removal, +teencode variants** |
+| Training | Standard fine-tune | **+Layer-wise LR decay, +label smoothing, +focal loss γ=2.0** |
+| Evaluation | Basic metrics | **+AUC-ROC per class, +error_analysis.csv** |
+| Target F1 | ~0.60–0.68 | **~0.72–0.80** |
+
+## 4. Local Setup
 
 ```bash
 python -m venv .venv
-pip install -r requirements-dev.txt
-pytest
+source .venv/bin/activate  # Linux/Mac
+.venv\Scripts\activate     # Windows
+pip install -r requirements.txt
 ```
 
 Do not commit `.env`, `.venv`, private datasets, local caches, or tokens.
 
-## 4. Train on Google Colab
+## 5. Train on Google Colab
 
-Open `notebooks/train_colab.ipynb`. The notebook only calls project modules:
+Open `notebooks/train_colab.ipynb`. The notebook calls project modules:
 
 ```bash
 python -m src.training.train --config configs/train.yaml
@@ -53,18 +71,13 @@ python -m src.export.export_model --config configs/train.yaml --push-to-hub
 python -m src.evaluation.manual_tests --config configs/model.yaml
 ```
 
-Configure `HF_TOKEN` in Colab secrets. If no token is available, training/export still runs locally and the push step is skipped.
+Configure `HF_TOKEN` in Colab secrets for Hugging Face Hub access.
 
-## 5. Model Artifacts
+## 6. Model Artifacts
 
-The local artifact root is:
-
-```text
-artifacts/hate_speech_model/
-```
+Local artifact root: `artifacts/hate_speech_model/`
 
 Expected files:
-
 ```text
 checkpoint/
 model/
@@ -74,34 +87,22 @@ metrics.json
 model_card.md
 ```
 
-Metrics are only written from a real evaluation run. If evaluation cannot run, the artifact states `Khong du du lieu de xac minh`.
-
-## 6. Push Model to Hugging Face Hub
-
-Set the repo in `configs/train.yaml` or `configs/model.yaml`:
-
-```yaml
-hf_repo_id: "quanghs1020/hate-speech-detection"
-```
-
-Then run:
+## 7. Push Model to Hugging Face Hub
 
 ```bash
 set HF_TOKEN=your_token
 python -m src.export.export_model --config configs/train.yaml --push-to-hub
 ```
 
-Only the final model, label mapping, metadata, metrics, and model card are uploaded by default. Checkpoints are skipped unless `--push-checkpoints` is passed.
-
-## 7. Run API Locally
+## 8. Run API Locally
 
 ```bash
 uvicorn src.api.app:app --host 0.0.0.0 --port 8000
 ```
 
-The API loads from Hugging Face first when configured, then falls back to a local artifact if available.
+The API loads from Hugging Face first when configured, then falls back to a local artifact.
 
-## 8. Run with Docker
+## 9. Run with Docker
 
 ```bash
 docker build -t hate-speech-api .
@@ -109,48 +110,90 @@ docker run -p 8000:8000 hate-speech-api
 ```
 
 With Compose:
-
 ```bash
 docker compose up --build
 ```
 
-## 9. API Endpoints
+## 10. API Endpoints
 
 | Endpoint | Purpose |
 |---|---|
 | `GET /health` | Process health check |
 | `GET /ready` | Model readiness and version |
 | `GET /metadata` | Returns `metadata.json` content |
-| `POST /predict` | Predict one text |
+| `POST /predict` | Predict one text (with language detection) |
 | `POST /predict-batch` | Predict multiple texts |
 
-## 10. Evaluation
+### Predict Request/Response
+
+```json
+// POST /predict
+{
+  "text": "Bài viết này thật tuyệt vời!",
+  "language": "vi"
+}
+
+// Response
+{
+  "text": "Bài viết này thật tuyệt vời!",
+  "label": "CLEAN",
+  "confidence": 0.95,
+  "probabilities": {"CLEAN": 0.95, "OFFENSIVE": 0.03, "HATE": 0.02},
+  "model_version": "v2.0.0",
+  "language": "vi"
+}
+```
+
+## 11. Preprocessing Pipeline
+
+```text
+Input: raw Vietnamese text
+  → Unicode NFKC normalization
+  → Remove URLs, HTML entities, @mentions
+  → Normalize repeated characters ("đẹpppp" → "đẹp")
+  → Normalize teencode ("ko" → "không", "dc" → "được")
+  → Normalize whitespace
+  → Word segmentation via underthesea ("sinh viên" → "sinh_viên")
+  → Do NOT lowercase or strip diacritics
+Output: cleaned text ready for PhoBERT tokenizer
+```
+
+## 12. Evaluation
 
 ```bash
 python -m src.evaluation.evaluate --config configs/train.yaml
 ```
 
-Outputs are written to `artifacts/hate_speech_model/metrics.json` and `results/evaluation_report.md`.
+Outputs:
+- `artifacts/hate_speech_model/metrics.json` — all metrics including AUC-ROC
+- `results/evaluation_report.md` — human-readable report
+- `results/confusion_matrix.png` — visualization
+- `results/error_analysis.csv` — misclassified samples with error types
 
-## 11. Manual Robustness Tests
+## 13. Manual Robustness Tests
 
 ```bash
 python -m src.evaluation.manual_tests --config configs/model.yaml
 ```
 
-The report is written to `results/manual_test_report.md`.
+Report written to `results/manual_test_report.md`.
 
-## 12. CI/CD
+## 14. Agentic AI Component
+
+The system includes a Gemini-powered content moderation agent with:
+- **Multi-step reasoning**: Language detection → Classification → Decision
+- **Tool usage**: classify_text(), detect_language(), log_event()
+- **Dynamic decisions**: Borderline texts trigger clarifying questions
+
+## 15. CI/CD
 
 GitHub Actions includes:
+- `.github/workflows/ci.yml`: lint, test, API import check
+- `.github/workflows/docker.yml`: Docker build and health check
 
-- `.github/workflows/ci.yml`: install dev dependencies, run `ruff`, run `pytest`, import the API.
-- `.github/workflows/docker.yml`: build the Docker image and call `/health`.
+## 16. Limitations
 
-CI does not download large datasets or train a model.
-
-## 13. Limitations
-
-- Model quality depends on the dataset and evaluation run used to create the artifact.
-- Automated moderation should be paired with human review for high-impact decisions.
-- Private Hugging Face repos require `HF_TOKEN`; never hard-code it in notebooks, source, Dockerfile, or Compose files.
+- Model quality depends on the ViHSD dataset (Vietnamese social media)
+- PhoBERT requires Vietnamese word segmentation (underthesea dependency)
+- Automated moderation should be paired with human review for high-impact decisions
+- Private Hugging Face repos require `HF_TOKEN`

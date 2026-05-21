@@ -27,8 +27,8 @@ data:
 
 models:
   baseline:          "{project_root}/models/baseline/tfidf_lr.pkl"
-  checkpoints_dir:   "{project_root}/models/xlmr_vihsd/checkpoints"
-  final_hf_dir:      "{project_root}/models/xlmr_vihsd/final_hf"
+  checkpoints_dir:   "{project_root}/models/phobert_vihsd/checkpoints"
+  final_hf_dir:      "{project_root}/models/phobert_vihsd/final_hf"
 
 results:
   class_weights:     "{project_root}/results/class_weights.json"
@@ -40,17 +40,25 @@ logs:
   agent_events:      "{project_root}/logs/agent_events.jsonl"
 
 # --- HuggingFace Hub (cloud model storage) ---
-hf_model_id: "thong7d/vihsd-xlmr-hate-speech"
+hf_model_id: "quanghs1020/hate-speech-detection"
 hf_cache: "/tmp/hf_cache"
 
 # --- Model architecture ---
 model:
-  backbone: "xlm-roberta-base"
+  backbone: "vinai/phobert-base-v2"
   num_labels: 3
   label_map:
     0: CLEAN
     1: OFFENSIVE
     2: HATE
+
+# --- Preprocessing config ---
+preprocessing:
+  use_word_segmentation: true
+  normalize_teencode: true
+  normalize_repeated_chars: true
+  unicode_normalize: true
+  min_text_length: 3
 
 # --- Training config (Colab T4 optimized) ---
 training:

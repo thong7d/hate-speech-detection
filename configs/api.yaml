@@ -13,3 +13,4 @@ model:
   metrics_path: "artifacts/hate_speech_model/metrics.json"
   threshold: 0.5
   max_length: 128
+  use_word_segmentation: true

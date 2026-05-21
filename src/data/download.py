@@ -123,7 +123,7 @@ def download_and_extract(config_path: str):
                     with zip_ref.open(member) as source, open(target_path, "wb") as target:
                         shutil.copyfileobj(source, target)
                         
-                    print(f"✅ Extracted: {filename} -> {target_path}")
+                    print(f"[OK] Extracted: {filename} -> {target_path}")
                     extracted_count += 1
 
     finally:
@@ -132,9 +132,9 @@ def download_and_extract(config_path: str):
             os.remove(zip_temp_path)
     
     if extracted_count == len(target_files):
-        print("🎉 Phase 1: Data Acquisition completed successfully.")
+        print("[SUCCESS] Phase 1: Data Acquisition completed successfully.")
     else:
-        print(f"⚠️ Warning: Expected {len(target_files)} files, but extracted {extracted_count}.")
+        print(f"[WARNING] Expected {len(target_files)} files, but extracted {extracted_count}.")
 
 if __name__ == "__main__":
     import sys

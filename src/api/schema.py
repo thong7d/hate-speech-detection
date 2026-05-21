@@ -18,6 +18,7 @@ class ReadyResponse(BaseModel):
 
 class PredictRequest(BaseModel):
     text: str = Field(..., min_length=0, max_length=5000)
+    language: str | None = Field(None, description="Optional language hint (vi, en, etc.)")
 
 
 class BatchPredictRequest(BaseModel):
@@ -30,6 +31,7 @@ class PredictionResponse(BaseModel):
     confidence: float
     probabilities: dict[str, float]
     model_version: str
+    language: str | None = None
 
 
 class BatchPredictionResponse(BaseModel):

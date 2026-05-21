@@ -4,6 +4,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
 try:
@@ -46,9 +47,19 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Hate Speech Detection API",
-    description="Production API for hate speech detection from Hugging Face Hub or local artifacts.",
-    version="1.0.0",
+    description="Production API for Vietnamese hate speech detection. "
+                "Powered by PhoBERT fine-tuned on ViHSD dataset.",
+    version="2.0.0",
     lifespan=lifespan,
+)
+
+# CORS middleware for web frontend access
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -81,7 +92,17 @@ def predict(
 ) -> dict:
     if model is None:
         raise HTTPException(status_code=503, detail=readiness()["error"] or "Model not loaded.")
-    return model.predict(request.text)
+    result = model.predict(request.text)
+    # Detect language if langdetect is available
+    language = request.language
+    if language is None:
+        try:
+            from langdetect import detect
+            language = detect(request.text)
+        except Exception:
+            language = "vi"
+    result["language"] = language
+    return result
 
 
 @app.post("/predict-batch", response_model=BatchPredictionResponse, tags=["Inference"])
