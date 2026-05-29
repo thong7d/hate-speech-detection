@@ -21,7 +21,7 @@ except ImportError:
 INSUFFICIENT = "Khong du du lieu de xac minh"
 
 
-def evaluate_from_config(config: dict[str, Any]) -> dict[str, Any]:
+def evaluate_from_config(config: dict[str, Any], hf_repo_id: str | None = None) -> dict[str, Any]:
     data_cfg = config["data"]
     evaluation_cfg = config["evaluation"]
     export_cfg = config["export"]
@@ -34,8 +34,22 @@ def evaluate_from_config(config: dict[str, Any]) -> dict[str, Any]:
     final_model_dir = resolve_path(export_cfg["final_model_dir"])
     error_analysis_path = resolve_path(evaluation_cfg.get("error_analysis_path", "results/error_analysis.csv"))
 
-    if not test_path.exists() or not final_model_dir.exists():
-        payload = {"status": INSUFFICIENT, "reason": "missing test split or model artifact"}
+    if hf_repo_id is None:
+        hf_repo_id = (
+            export_cfg.get("hf_repo_id")
+            or config.get("api", {}).get("hf_repo_id")
+            or __import__("os").environ.get("HF_REPO_ID")
+            or __import__("os").environ.get("HF_MODEL_ID")
+        )
+
+    has_local_model = final_model_dir.exists()
+    has_remote_model = bool(hf_repo_id)
+
+    if not test_path.exists() or (not has_local_model and not has_remote_model):
+        payload = {
+            "status": INSUFFICIENT,
+            "reason": f"missing test split (exists: {test_path.exists()}) or model (local exists: {has_local_model}, remote repo: {hf_repo_id})"
+        }
         write_json(metrics_path, payload)
         _write_report(report_path, payload)
         return payload
@@ -51,9 +65,12 @@ def evaluate_from_config(config: dict[str, Any]) -> dict[str, Any]:
         label_column=data_cfg.get("label_column"),
         use_word_segmentation=use_word_seg,
     )
+    
+    model_source = "local" if has_local_model else "huggingface"
     classifier = HateSpeechClassifier(
-        model_source="local",
+        model_source=model_source,
         model_path=str(final_model_dir),
+        hf_repo_id=hf_repo_id,
         artifact_dir=export_cfg["artifact_dir"],
         max_length=int(model_cfg.get("max_length", 128)),
         use_word_segmentation=use_word_seg,
@@ -255,8 +272,18 @@ def _write_confusion_matrix(path: Path, metrics: dict[str, Any], label_names: li
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate the exported hate speech model.")
     parser.add_argument("--config", default="configs/train.yaml")
+    parser.add_argument("--hf_repo_id", default=None, help="Hugging Face repo ID to load model from.")
+    parser.add_argument("--use_word_segmentation", default=None, help="Override use_word_segmentation (True/False)")
     args = parser.parse_args()
-    metrics = evaluate_from_config(load_yaml_config(args.config))
+
+    config = load_yaml_config(args.config)
+    if args.use_word_segmentation is not None:
+        val = str(args.use_word_segmentation).lower() in ("true", "1", "yes")
+        if "preprocessing" not in config:
+            config["preprocessing"] = {}
+        config["preprocessing"]["use_word_segmentation"] = val
+
+    metrics = evaluate_from_config(config, hf_repo_id=args.hf_repo_id)
     print(metrics)
 
 
