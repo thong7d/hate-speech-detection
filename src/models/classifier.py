@@ -182,9 +182,19 @@ class HateSpeechClassifier:
         for source_name, source_value in sources:
             try:
                 token = _env("HF_TOKEN") if source_name == "huggingface" else None
-                self.tokenizer = AutoTokenizer.from_pretrained(source_value, token=token, trust_remote_code=False)
+                
+                # BỔ SUNG: Chỉ định subfolder="model" khi tải từ Hugging Face Hub
+                subfolder = "model" if source_name == "huggingface" else None
+
+                self.tokenizer = AutoTokenizer.from_pretrained(
+                    source_value, 
+                    subfolder=subfolder, 
+                    token=token, 
+                    trust_remote_code=False
+                )
                 self.model = AutoModelForSequenceClassification.from_pretrained(
                     source_value,
+                    subfolder=subfolder,
                     token=token,
                     trust_remote_code=False,
                 )
@@ -199,7 +209,6 @@ class HateSpeechClassifier:
                 self.tokenizer = None
 
         raise RuntimeError(f"Unable to load model from Hugging Face or local artifact: {last_error}")
-
     def _sync_mapping_from_model_config(self) -> None:
         config = getattr(self.model, "config", None)
         id2label = getattr(config, "id2label", None)
