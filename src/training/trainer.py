@@ -214,16 +214,21 @@ def train_from_config(config: dict[str, Any]) -> dict[str, Any]:
         **trainer_kwargs,
     )
 
-    resume_from_checkpoint = False
-    if push_to_hub:
-        # Nếu có đẩy lên Hub, Trainer sẽ tự clone repo chứa checkpoint từ Hub về và ta tự động resume
-        resume_from_checkpoint = True
-    elif output_dir.exists():
-        # Nếu chạy local/offline, kiểm tra nếu có thư mục checkpoint cũ thì resume
-        checkpoints = list(output_dir.glob("checkpoint-*"))
+    output_dir = __import__("pathlib").Path(output_dir)
+    resume_from_checkpoint = None
+    if output_dir.exists():
+        # Quét tìm tất cả các thư mục dạng checkpoint-* thực tế trong thư mục đầu ra (bao gồm cả đệ quy)
+        checkpoints = list(output_dir.glob("**/checkpoint-*"))
         if checkpoints:
-            resume_from_checkpoint = True
-    print(f"[TRAIN] Tự động khôi phục từ checkpoint đám mây/cục bộ: {resume_from_checkpoint}")
+            # Sắp xếp danh sách dựa trên chỉ số bước (step) huấn luyện tăng dần
+            checkpoints.sort(key=lambda x: int(x.name.split("-")[-1]))
+            resume_from_checkpoint = str(checkpoints[-1])
+
+    if resume_from_checkpoint:
+        print(f"[TRAIN] Phát hiện checkpoint hợp lệ. Khôi phục tiến trình từ: {resume_from_checkpoint}")
+    else:
+        print("[TRAIN] Không tìm thấy thư mục checkpoint-* nào. Tiến hành huấn luyện phiên mới từ Epoch 0.")
+        resume_from_checkpoint = None
     
     # Bắt đầu huấn luyện và truyền cờ khôi phục
     trainer.train(resume_from_checkpoint=resume_from_checkpoint)
