@@ -115,14 +115,24 @@ def train_from_config(config: dict[str, Any]) -> dict[str, Any]:
     print(f"[TRAIN] Validation set size: {len(valid_df)} samples")
     print(f"[TRAIN] Label distribution: {train_df['label'].value_counts().to_dict()}")
 
-    tokenizer = AutoTokenizer.from_pretrained(model_cfg["base_model"], trust_remote_code=False)
-    model = AutoModelForSequenceClassification.from_pretrained(
-        model_cfg["base_model"],
-        num_labels=num_labels,
-        id2label=id2label,
-        label2id=label2id,
-        trust_remote_code=False,
-    )
+    tokenizer = AutoTokenizer.from_pretrained(model_cfg["base_model"], trust_remote_code=True)
+    if "xlm-roberta" in model_cfg["base_model"].lower():
+        from src.models.classifier import XLMRobertaTextCNN
+        model = XLMRobertaTextCNN.from_pretrained(
+            model_cfg["base_model"],
+            num_labels=num_labels,
+            id2label=id2label,
+            label2id=label2id,
+            trust_remote_code=True,
+        )
+    else:
+        model = AutoModelForSequenceClassification.from_pretrained(
+            model_cfg["base_model"],
+            num_labels=num_labels,
+            id2label=id2label,
+            label2id=label2id,
+            trust_remote_code=False,
+        )
 
     max_length = int(model_cfg.get("max_length", 128))
     train_dataset = ViHSDDataset(train_df["text"].tolist(), train_df["label"].tolist(), tokenizer, max_length)
@@ -166,8 +176,12 @@ def train_from_config(config: dict[str, Any]) -> dict[str, Any]:
         )
 
     loss_name = str(training_cfg.get("loss", "cross_entropy")).lower()
-    focal_gamma = float(training_cfg.get("focal_gamma", 0.0))
+    focal_gamma = float(training_cfg.get("focal_gamma", 2.0))
     layerwise_lr_decay = float(training_cfg.get("layerwise_lr_decay", 0.0))
+
+    if loss_name == "focal" and not class_weights:
+        weights_by_id = compute_balanced_class_weights(train_df["label"].tolist(), num_labels)
+        class_weights = [float(weights_by_id[idx]) for idx in range(num_labels)]
 
     # Determine trainer class
     use_custom_trainer = bool(class_weights or loss_name == "focal" or layerwise_lr_decay > 0)
@@ -200,6 +214,13 @@ def train_from_config(config: dict[str, Any]) -> dict[str, Any]:
     artifact_dir = resolve_path(export_cfg["artifact_dir"])
     final_model_dir = resolve_path(export_cfg["final_model_dir"])
     final_model_dir.mkdir(parents=True, exist_ok=True)
+
+    if "xlm-roberta" in model_cfg["base_model"].lower():
+        from src.models.classifier import XLMRobertaTextCNN
+        from transformers import XLMRobertaConfig
+        XLMRobertaConfig.register_for_auto_class("AutoConfig")
+        XLMRobertaTextCNN.register_for_auto_class("AutoModelForSequenceClassification")
+
     trainer.save_model(str(final_model_dir))
     tokenizer.save_pretrained(str(final_model_dir))
 

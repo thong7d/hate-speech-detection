@@ -4,16 +4,18 @@ services:
     image: hate-speech-api:latest
     ports:
       - "8000:8000"
+    env_file:
+      - .env
     environment:
       MODEL_SOURCE: "huggingface"
-      HF_REPO_ID: "thong7d/vihsd-phobert-hate-speech"
+      HF_REPO_ID: "thong7d/vihsd-xlmr-hate-speech"
       MODEL_LOCAL_PATH: "artifacts/hate_speech_model/model"
       HF_HOME: "/tmp/hf_cache"
       TRANSFORMERS_CACHE: "/tmp/hf_cache"
     volumes:
       - ./.hf_cache:/tmp/hf_cache
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
       interval: 30s
       timeout: 10s
       retries: 3

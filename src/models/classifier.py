@@ -5,7 +5,11 @@ from pathlib import Path
 from typing import Any, Mapping
 
 import numpy as np
+import torch
+import torch.nn as nn
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
+from transformers import XLMRobertaPreTrainedModel, XLMRobertaModel, XLMRobertaConfig
+from transformers.modeling_outputs import SequenceClassifierOutput
 
 try:
     from src.data.preprocessing import preprocess_text
@@ -20,6 +24,93 @@ except ImportError:
     from data.preprocessing import preprocess_text
     from models.registry import DEFAULT_LABELS, build_label_mapping, id2label_from_mapping, load_label_mapping
     from utils.config import resolve_path
+
+
+class XLMRobertaTextCNN(XLMRobertaPreTrainedModel):
+    config_class = XLMRobertaConfig
+
+    def __init__(self, config: XLMRobertaConfig):
+        super().__init__(config)
+        self.roberta = XLMRobertaModel(config, add_pooling_layer=False)
+        
+        hidden_size = config.hidden_size
+        num_labels = config.num_labels
+        num_filters = 128
+        kernel_sizes = [2, 3, 4, 5]
+        
+        self.convs = nn.ModuleList([
+            nn.Conv1d(
+                in_channels=hidden_size,
+                out_channels=num_filters,
+                kernel_size=k,
+                padding=0
+            ) for k in kernel_sizes
+        ])
+        
+        self.fc = nn.Linear(len(kernel_sizes) * num_filters, num_labels)
+        self.post_init()
+
+    def forward(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        token_type_ids=None,
+        position_ids=None,
+        head_mask=None,
+        inputs_embeds=None,
+        labels=None,
+        output_attentions=None,
+        output_hidden_states=None,
+        return_dict=None,
+    ):
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        outputs = self.roberta(
+            input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            position_ids=position_ids,
+            head_mask=head_mask,
+            inputs_embeds=inputs_embeds,
+            output_attentions=output_attentions,
+            output_hidden_states=True,
+            return_dict=return_dict,
+        )
+
+        # Trích xuất hidden states từ XLM-R: (batch_size, sequence_length, hidden_size)
+        sequence_output = outputs[0]
+
+        # Chuyển vị trục để phù hợp với Conv1d: (batch_size, hidden_size, sequence_length)
+        x = sequence_output.transpose(1, 2)
+
+        # Đẩy qua các tầng Conv1d song song + Max pooling qua chiều dài chuỗi
+        pooled_outputs = []
+        for conv in self.convs:
+            c = torch.relu(conv(x))
+            p = torch.max(c, dim=2)[0]
+            pooled_outputs.append(p)
+
+        # Nối đặc trưng: (batch_size, num_filters * 4)
+        cat = torch.cat(pooled_outputs, dim=1)
+
+        # Đưa qua tầng tuyến tính đầu ra: (batch_size, num_labels)
+        logits = self.fc(cat)
+
+        loss = None
+        if labels is not None:
+            loss_fct = nn.CrossEntropyLoss()
+            loss = loss_fct(logits.view(-1, self.config.num_labels), labels.view(-1))
+
+        if not return_dict:
+            output = (logits,) + outputs[2:]
+            return ((loss,) + output) if loss is not None else output
+
+        return SequenceClassifierOutput(
+            loss=loss,
+            logits=logits,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
+        )
 
 
 def compute_metrics(eval_pred: tuple[np.ndarray, np.ndarray]) -> dict[str, float]:
@@ -70,6 +161,7 @@ class HateSpeechClassifier:
         label_mapping_path: str | None = None,
         metadata_path: str | None = None,
         threshold: float = 0.5,
+        thresholds: dict[str, float] | None = None,
         max_length: int = 128,
         device: str = "auto",
         use_word_segmentation: bool = True,
@@ -81,6 +173,7 @@ class HateSpeechClassifier:
         self.label_mapping_path = resolve_path(label_mapping_path or self.artifact_dir / "label_mapping.json")
         self.metadata_path = resolve_path(metadata_path or self.artifact_dir / "metadata.json")
         self.threshold = threshold
+        self.thresholds = thresholds or {"CLEAN": 0.5, "OFFENSIVE": 0.38, "HATE": 0.32}
         self.max_length = max_length
         self.device_name = device
         self.use_word_segmentation = use_word_segmentation
@@ -100,6 +193,7 @@ class HateSpeechClassifier:
         env_source = _env("MODEL_SOURCE")
         env_repo = _env("HF_REPO_ID") or _env("HF_MODEL_ID")
         env_local = _env("MODEL_LOCAL_PATH")
+        thresholds = model_cfg.get("thresholds")
         return cls(
             model_source=env_source or source,
             model_path=env_local or model_cfg.get("local_path", "artifacts/hate_speech_model/model"),
@@ -108,6 +202,7 @@ class HateSpeechClassifier:
             label_mapping_path=model_cfg.get("label_mapping_path"),
             metadata_path=model_cfg.get("metadata_path"),
             threshold=float(model_cfg.get("threshold", 0.5)),
+            thresholds=thresholds,
             max_length=int(model_cfg.get("max_length", 128)),
             use_word_segmentation=bool(model_cfg.get("use_word_segmentation", True)),
         )
@@ -119,8 +214,6 @@ class HateSpeechClassifier:
     def predict(self, text: str) -> dict:
         if self.model is None or self.tokenizer is None or self.device is None:
             raise RuntimeError("Model is not loaded.")
-
-        import torch
 
         original_text = "" if text is None else str(text)
         model_text = preprocess_text(original_text, use_word_segmentation=self.use_word_segmentation)
@@ -138,12 +231,29 @@ class HateSpeechClassifier:
             logits = self.model(**encoding).logits
             probabilities_tensor = torch.softmax(logits, dim=-1).detach().cpu()[0]
 
-        pred_id = int(torch.argmax(probabilities_tensor).item())
         probabilities = {
             self.id2label.get(idx, str(idx)): round(float(probabilities_tensor[idx].item()), 4)
             for idx in range(len(probabilities_tensor))
         }
-        label = self.id2label.get(pred_id, str(pred_id))
+
+        # Logic so khớp đa ngưỡng động
+        prob_clean = probabilities.get("CLEAN", 0.0)
+        prob_offensive = probabilities.get("OFFENSIVE", 0.0)
+        prob_hate = probabilities.get("HATE", 0.0)
+
+        thresh_hate = self.thresholds.get("HATE", 0.32)
+        thresh_offensive = self.thresholds.get("OFFENSIVE", 0.38)
+
+        if prob_hate >= thresh_hate:
+            pred_id = 2
+            label = "HATE"
+        elif prob_offensive >= thresh_offensive:
+            pred_id = 1
+            label = "OFFENSIVE"
+        else:
+            pred_id = 0
+            label = "CLEAN"
+
         confidence = round(float(probabilities_tensor[pred_id].item()), 4)
         return {
             "text": original_text,
@@ -157,8 +267,7 @@ class HateSpeechClassifier:
         return [self.predict(text) for text in texts]
 
     def _load(self) -> None:
-        import torch
-        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+        from transformers import AutoConfig, AutoModelForSequenceClassification, AutoTokenizer
 
         if self.device_name == "auto":
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -182,22 +291,41 @@ class HateSpeechClassifier:
         for source_name, source_value in sources:
             try:
                 token = _env("HF_TOKEN") if source_name == "huggingface" else None
-                
-                # BỔ SUNG: Chỉ định subfolder="model" khi tải từ Hugging Face Hub
                 subfolder = "model" if source_name == "huggingface" else None
 
-                self.tokenizer = AutoTokenizer.from_pretrained(
-                    source_value, 
-                    subfolder=subfolder, 
-                    token=token, 
-                    trust_remote_code=False
-                )
-                self.model = AutoModelForSequenceClassification.from_pretrained(
+                # Đọc cấu hình AutoConfig trước
+                config = AutoConfig.from_pretrained(
                     source_value,
                     subfolder=subfolder,
                     token=token,
-                    trust_remote_code=False,
+                    trust_remote_code=True
                 )
+
+                self.tokenizer = AutoTokenizer.from_pretrained(
+                    source_value,
+                    subfolder=subfolder,
+                    token=token,
+                    trust_remote_code=True
+                )
+
+                # Nếu là mô hình xlm-roberta, tự động khởi tạo bằng XLMRobertaTextCNN với trust_remote_code=True
+                if getattr(config, "model_type", None) == "xlm-roberta":
+                    self.model = XLMRobertaTextCNN.from_pretrained(
+                        source_value,
+                        subfolder=subfolder,
+                        token=token,
+                        config=config,
+                        trust_remote_code=True,
+                    )
+                else:
+                    self.model = AutoModelForSequenceClassification.from_pretrained(
+                        source_value,
+                        subfolder=subfolder,
+                        token=token,
+                        config=config,
+                        trust_remote_code=False,
+                    )
+
                 self.model.to(self.device)
                 self.model.eval()
                 self.loaded_from = source_name
@@ -209,6 +337,7 @@ class HateSpeechClassifier:
                 self.tokenizer = None
 
         raise RuntimeError(f"Unable to load model from Hugging Face or local artifact: {last_error}")
+
     def _sync_mapping_from_model_config(self) -> None:
         config = getattr(self.model, "config", None)
         id2label = getattr(config, "id2label", None)

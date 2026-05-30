@@ -1,6 +1,6 @@
 model:
   source: "huggingface"
-  hf_repo_id: "thong7d/vihsd-phobert-hate-speech"
+  hf_repo_id: "thong7d/vihsd-xlmr-hate-speech"
   local_path: "artifacts/hate_speech_model/model"
   artifact_dir: "artifacts/hate_speech_model"
   label_mapping_path: "artifacts/hate_speech_model/label_mapping.json"
@@ -8,4 +8,4 @@ model:
   metrics_path: "artifacts/hate_speech_model/metrics.json"
   threshold: 0.5
   max_length: 128
-  use_word_segmentation: true
+  use_word_segmentation: false

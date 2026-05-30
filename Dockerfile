@@ -23,7 +23,7 @@ RUN pip install --no-cache-dir -e .
 ENV API_HOST=0.0.0.0 \
     API_PORT=8000 \
     MODEL_SOURCE=huggingface \
-    HF_REPO_ID=thong7d/vihsd-phobert-hate-speech \
+    HF_REPO_ID=thong7d/vihsd-xlmr-hate-speech \
     MODEL_LOCAL_PATH=artifacts/hate_speech_model/model \
     TOKENIZERS_PARALLELISM=false
 

@@ -40,12 +40,12 @@ logs:
   agent_events:      "{project_root}/logs/agent_events.jsonl"
 
 # --- HuggingFace Hub (cloud model storage) ---
-hf_model_id: "thong7d/vihsd-phobert-hate-speech"
+hf_model_id: "thong7d/vihsd-xlmr-hate-speech"
 hf_cache: "/tmp/hf_cache"
 
 # --- Model architecture ---
 model:
-  backbone: "vinai/phobert-base-v2"
+  backbone: "xlm-roberta-base"
   num_labels: 3
   label_map:
     0: CLEAN
@@ -54,7 +54,7 @@ model:
 
 # --- Preprocessing config ---
 preprocessing:
-  use_word_segmentation: true
+  use_word_segmentation: false
   normalize_teencode: true
   normalize_repeated_chars: true
   unicode_normalize: true
