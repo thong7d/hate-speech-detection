@@ -146,6 +146,8 @@ def train_from_config(config: dict[str, Any]) -> dict[str, Any]:
     label_smoothing = float(training_cfg.get("label_smoothing", 0.0))
     gradient_accumulation_steps = int(training_cfg.get("gradient_accumulation_steps", 1))
 
+    hf_token = __import__("os").environ.get("HF_TOKEN")
+    push_to_hub = bool(hf_token and export_cfg.get("hf_repo_id"))
     args = TrainingArguments(
         output_dir=str(output_dir),
         learning_rate=float(training_cfg.get("learning_rate", 2e-5)),
@@ -166,6 +168,10 @@ def train_from_config(config: dict[str, Any]) -> dict[str, Any]:
         label_smoothing_factor=label_smoothing,
         report_to=[],
         seed=seed,
+        push_to_hub=push_to_hub,
+        hub_model_id=export_cfg.get("hf_repo_id") if push_to_hub else None,
+        hub_strategy="checkpoint",  # Chỉ đồng bộ checkpoint mới nhất lên Hub
+        hub_token=hf_token if push_to_hub else None,
     )
     callbacks = []
     if int(training_cfg.get("early_stopping_patience", 0)) > 0:
@@ -208,7 +214,19 @@ def train_from_config(config: dict[str, Any]) -> dict[str, Any]:
         **trainer_kwargs,
     )
 
-    trainer.train()
+    resume_from_checkpoint = False
+    if push_to_hub:
+        # Nếu có đẩy lên Hub, Trainer sẽ tự clone repo chứa checkpoint từ Hub về và ta tự động resume
+        resume_from_checkpoint = True
+    elif output_dir.exists():
+        # Nếu chạy local/offline, kiểm tra nếu có thư mục checkpoint cũ thì resume
+        checkpoints = list(output_dir.glob("checkpoint-*"))
+        if checkpoints:
+            resume_from_checkpoint = True
+    print(f"[TRAIN] Tự động khôi phục từ checkpoint đám mây/cục bộ: {resume_from_checkpoint}")
+    
+    # Bắt đầu huấn luyện và truyền cờ khôi phục
+    trainer.train(resume_from_checkpoint=resume_from_checkpoint)
     metrics = trainer.evaluate()
 
     artifact_dir = resolve_path(export_cfg["artifact_dir"])

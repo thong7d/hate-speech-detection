@@ -70,7 +70,7 @@ training:
   warmup_ratio: 0.1
   weight_decay: 0.01
   dataloader_num_workers: 0
-  fp16: true
+  fp16: false
   save_total_limit: 2
   save_weights_only: true
   load_best_model_at_end: true

@@ -36,7 +36,7 @@ training:
   greater_is_better: true
   save_total_limit: 2
   early_stopping_patience: 3
-  fp16: true
+  fp16: false    
   max_grad_norm: 1.0
 
   # --- Loss function ---
