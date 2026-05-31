@@ -208,6 +208,46 @@ def test_focal_loss_clamping():
     assert not torch.isinf(loss)
     assert loss.item() >= 0.0
 
+def test_dynamic_hidden_states_and_attentions():
+    # Verify that XLMRobertaTextCNN only returns hidden_states and attentions if requested
+    config = XLMRobertaConfig(
+        vocab_size=100,
+        hidden_size=16,
+        num_attention_heads=2,
+        num_hidden_layers=2,
+        num_labels=3,
+        initializer_range=0.02
+    )
+    model = XLMRobertaTextCNN(config)
+    model.eval()
+
+    input_ids = torch.randint(0, 100, (2, 5))
+    attention_mask = torch.ones((2, 5), dtype=torch.long)
+    
+    # Case 1: output_hidden_states=False, output_attentions=False (default behavior during training/eval evaluation loop)
+    with torch.no_grad():
+        outputs_default = model(
+            input_ids=input_ids, 
+            attention_mask=attention_mask,
+            output_hidden_states=False,
+            output_attentions=False
+        )
+        assert outputs_default.hidden_states is None
+        assert outputs_default.attentions is None
+
+    # Case 2: output_hidden_states=True, output_attentions=True
+    with torch.no_grad():
+        outputs_all = model(
+            input_ids=input_ids, 
+            attention_mask=attention_mask,
+            output_hidden_states=True,
+            output_attentions=True
+        )
+        assert outputs_all.hidden_states is not None
+        assert len(outputs_all.hidden_states) == 3  # embedding + 2 encoder layers
+        assert outputs_all.attentions is not None
+        assert len(outputs_all.attentions) == 2  # 2 encoder layers
+
 if __name__ == "__main__":
     import sys
     class pytest_approx:
@@ -238,5 +278,9 @@ if __name__ == "__main__":
     print("Running test_focal_loss_clamping...")
     test_focal_loss_clamping()
     print("test_focal_loss_clamping passed!")
+    
+    print("Running test_dynamic_hidden_states_and_attentions...")
+    test_dynamic_hidden_states_and_attentions()
+    print("test_dynamic_hidden_states_and_attentions passed!")
     
     print("ALL TESTS PASSED SUCCESSFULLY!")
