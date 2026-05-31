@@ -1,5 +1,30 @@
 from __future__ import annotations
 
+import torch
+try:
+    if hasattr(torch, "serialization") and hasattr(torch.serialization, "add_safe_globals"):
+        import numpy
+        # Allowlist standard NumPy classes and reconstruction globals for safe loading in PyTorch 2.6+
+        safe_numpy_globals = []
+        for name in [
+            "numpy._core.multiarray._reconstruct",
+            "numpy.core.multiarray._reconstruct",
+            "numpy.dtype",
+            "numpy.ndarray"
+        ]:
+            try:
+                parts = name.split(".")
+                obj = __import__(parts[0])
+                for part in parts[1:]:
+                    obj = getattr(obj, part)
+                safe_numpy_globals.append(obj)
+            except AttributeError:
+                pass
+        if safe_numpy_globals:
+            torch.serialization.add_safe_globals(safe_numpy_globals)
+except Exception:
+    pass
+
 import argparse
 from pathlib import Path
 from typing import Any
