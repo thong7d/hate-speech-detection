@@ -505,10 +505,10 @@ def _custom_loss_trainer_class(base_trainer):
             # Collect named parameters into layer groups
             optimizer_grouped_parameters = []
 
-            # Classifier head: full learning rate
+            # Classifier head: full learning rate (Updated to support Custom TextCNN head layers)
             classifier_params = []
             for name, param in model.named_parameters():
-                if "classifier" in name or "pooler" in name:
+                if "classifier" in name or "pooler" in name or "convs" in name or "fc" in name:
                     classifier_params.append((name, param))
 
             if classifier_params:
@@ -591,6 +591,8 @@ def _custom_loss_trainer_class(base_trainer):
                 log_probs = F.log_softmax(logits, dim=-1)
                 nll = -log_probs.gather(dim=-1, index=labels.unsqueeze(1)).squeeze(1)
                 pt = torch.exp(-nll)
+                # Numerical stability guard: clamp pt to prevent negative bases or zero-gradient anomalies in pow()
+                pt = torch.clamp(pt, min=1e-7, max=1.0 - 1e-7)
                 if weights is not None:
                     nll = nll * weights.gather(0, labels)
                 loss = ((1 - pt) ** self.focal_gamma * nll).mean()
