@@ -240,8 +240,7 @@ def train_from_config(config: dict[str, Any]) -> dict[str, Any]:
 
     if "xlm-roberta" in model_cfg["base_model"].lower():
         from src.models.classifier import XLMRobertaTextCNN
-        from transformers import XLMRobertaConfig
-        XLMRobertaConfig.register_for_auto_class("AutoConfig")
+        # Register ONLY the custom architecture, DO NOT register built-in XLMRobertaConfig
         XLMRobertaTextCNN.register_for_auto_class("AutoModelForSequenceClassification")
 
     trainer.save_model(str(final_model_dir))
