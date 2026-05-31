@@ -50,6 +50,20 @@ class XLMRobertaTextCNN(XLMRobertaPreTrainedModel):
         self.fc = nn.Linear(len(kernel_sizes) * num_filters, num_labels)
         self.post_init()
 
+    def _init_weights(self, module):
+        """Initialize custom Conv1d and Linear layers using the same pre-trained distribution range."""
+        if isinstance(module, (nn.Linear, nn.Conv1d)):
+            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+            if module.bias is not None:
+                module.bias.data.zero_()
+        elif isinstance(module, nn.Embedding):
+            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+            if module.padding_idx is not None:
+                module.weight.data[module.padding_idx].zero_()
+        elif isinstance(module, nn.LayerNorm):
+            module.bias.data.zero_()
+            module.weight.data.fill_(1.0)
+
     def forward(
         self,
         input_ids=None,
@@ -79,6 +93,20 @@ class XLMRobertaTextCNN(XLMRobertaPreTrainedModel):
 
         # Trích xuất hidden states từ XLM-R: (batch_size, sequence_length, hidden_size)
         sequence_output = outputs[0]
+
+        # Sequence Length Guard: Bảo vệ độ rộng tối thiểu của chiều chuỗi là 5
+        seq_len = sequence_output.size(1)
+        max_kernel = 5
+        if seq_len < max_kernel:
+            padding_len = max_kernel - seq_len
+            pad_tensor = torch.zeros(
+                sequence_output.size(0), 
+                padding_len, 
+                sequence_output.size(2), 
+                device=sequence_output.device, 
+                dtype=sequence_output.dtype
+            )
+            sequence_output = torch.cat([sequence_output, pad_tensor], dim=1)
 
         # Chuyển vị trục để phù hợp với Conv1d: (batch_size, hidden_size, sequence_length)
         x = sequence_output.transpose(1, 2)

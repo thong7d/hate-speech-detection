@@ -502,74 +502,80 @@ def _custom_loss_trainer_class(base_trainer):
             weight_decay = self.args.weight_decay
             no_decay = {"bias", "LayerNorm.weight", "LayerNorm.bias", "layer_norm.weight", "layer_norm.bias"}
 
-            # Collect named parameters into layer groups
             optimizer_grouped_parameters = []
-
-            # Classifier head: full learning rate (Updated to support Custom TextCNN head layers)
-            classifier_params = []
-            for name, param in model.named_parameters():
-                if "classifier" in name or "pooler" in name or "convs" in name or "fc" in name:
-                    classifier_params.append((name, param))
-
-            if classifier_params:
-                optimizer_grouped_parameters.append({
-                    "params": [p for n, p in classifier_params if not any(nd in n for nd in no_decay)],
-                    "weight_decay": weight_decay,
-                    "lr": base_lr,
-                })
-                optimizer_grouped_parameters.append({
-                    "params": [p for n, p in classifier_params if any(nd in n for nd in no_decay)],
-                    "weight_decay": 0.0,
-                    "lr": base_lr,
-                })
-
-            # Encoder layers: decaying learning rate
             num_layers = _get_num_layers(model)
+
+            classifier_params = []
+            layer_params = {i: [] for i in range(num_layers)}
+            emb_params = []
+            remaining_params = []
+
+            # Sequentially categorize each parameter to guarantee zero overlaps/omissions
+            for name, param in model.named_parameters():
+                if not param.requires_grad:
+                    continue
+                
+                # 1. Classifier head layers (full base_lr)
+                if any(kw in name for kw in ["classifier", "pooler", "convs", "fc"]):
+                    classifier_params.append((name, param))
+                # 2. Encoder layers (decayed lr)
+                elif any(f".layer.{i}." in name or f".layers.{i}." in name for i in range(num_layers)):
+                    matched_idx = None
+                    for i in range(num_layers):
+                        if f".layer.{i}." in name or f".layers.{i}." in name:
+                            matched_idx = i
+                            break
+                    if matched_idx is not None:
+                        layer_params[matched_idx].append((name, param))
+                    else:
+                        remaining_params.append((name, param))
+                # 3. Embeddings (lowest lr)
+                elif "embedding" in name.lower():
+                    emb_params.append((name, param))
+                # 4. Remaining parameters fallback
+                else:
+                    remaining_params.append((name, param))
+
+            # Helper function to split a group into decay and no_decay subgroups
+            def add_group(params_list, lr):
+                if not params_list:
+                    return
+                decay_p = []
+                nodecay_p = []
+                for n, p in params_list:
+                    if any(nd in n for nd in no_decay):
+                        nodecay_p.append(p)
+                    else:
+                        decay_p.append(p)
+                
+                if decay_p:
+                    optimizer_grouped_parameters.append({
+                        "params": decay_p,
+                        "weight_decay": weight_decay,
+                        "lr": lr,
+                    })
+                if nodecay_p:
+                    optimizer_grouped_parameters.append({
+                        "params": nodecay_p,
+                        "weight_decay": 0.0,
+                        "lr": lr,
+                    })
+
+            # Add classifier head parameters
+            add_group(classifier_params, base_lr)
+
+            # Add encoder layer parameters (from top layers to bottom layers)
             for layer_idx in range(num_layers - 1, -1, -1):
                 layer_lr = base_lr * (decay ** (num_layers - 1 - layer_idx))
-                layer_params = [(n, p) for n, p in model.named_parameters()
-                                if f".layer.{layer_idx}." in n or f".layers.{layer_idx}." in n]
-                if layer_params:
-                    optimizer_grouped_parameters.append({
-                        "params": [p for n, p in layer_params if not any(nd in n for nd in no_decay)],
-                        "weight_decay": weight_decay,
-                        "lr": layer_lr,
-                    })
-                    optimizer_grouped_parameters.append({
-                        "params": [p for n, p in layer_params if any(nd in n for nd in no_decay)],
-                        "weight_decay": 0.0,
-                        "lr": layer_lr,
-                    })
+                add_group(layer_params[layer_idx], layer_lr)
 
-            # Embeddings: lowest learning rate
+            # Add embedding parameters
             emb_lr = base_lr * (decay ** num_layers)
-            emb_params = [(n, p) for n, p in model.named_parameters()
-                          if "embedding" in n.lower() and not any(f".layer.{i}." in n or f".layers.{i}." in n for i in range(num_layers))
-                          and "classifier" not in n and "pooler" not in n]
-            if emb_params:
-                optimizer_grouped_parameters.append({
-                    "params": [p for n, p in emb_params if not any(nd in n for nd in no_decay)],
-                    "weight_decay": weight_decay,
-                    "lr": emb_lr,
-                })
-                optimizer_grouped_parameters.append({
-                    "params": [p for n, p in emb_params if any(nd in n for nd in no_decay)],
-                    "weight_decay": 0.0,
-                    "lr": emb_lr,
-                })
+            add_group(emb_params, emb_lr)
 
-            # Catch remaining parameters
-            assigned = set()
-            for group in optimizer_grouped_parameters:
-                for p in group["params"]:
-                    assigned.add(id(p))
-            remaining = [(n, p) for n, p in model.named_parameters() if id(p) not in assigned]
-            if remaining:
-                optimizer_grouped_parameters.append({
-                    "params": [p for n, p in remaining],
-                    "weight_decay": weight_decay,
-                    "lr": base_lr * (decay ** (num_layers // 2)),
-                })
+            # Add remaining parameters
+            remaining_lr = base_lr * (decay ** (num_layers // 2))
+            add_group(remaining_params, remaining_lr)
 
             self.optimizer = torch.optim.AdamW(optimizer_grouped_parameters)
             return self.optimizer
