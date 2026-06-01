@@ -248,6 +248,51 @@ def test_dynamic_hidden_states_and_attentions():
         assert outputs_all.attentions is not None
         assert len(outputs_all.attentions) == 2  # 2 encoder layers
 
+def test_classifier_thresholds_and_fallback():
+    from src.models.classifier import HateSpeechClassifier
+    
+    # Test standard argmax fallback when thresholds is None
+    classifier = HateSpeechClassifier(
+        model_source="huggingface",
+        hf_repo_id="thong7d/vihsd-xlmr-hate-speech",
+        thresholds=None,
+    )
+    # Mock model and configuration mappings
+    class DummyConfig:
+        num_labels = 3
+        id2label = {0: "CLEAN", 1: "OFFENSIVE", 2: "HATE"}
+    classifier.id2label = DummyConfig.id2label
+    
+    # Mock preprocessing & tokenizer
+    classifier.tokenizer = lambda text, **kwargs: {"input_ids": torch.tensor([[1]])}
+    classifier.device = torch.device("cpu")
+    
+    class MockOutput:
+        def __init__(self, probs):
+            self.logits = torch.log(probs).unsqueeze(0)
+            
+    # Case 1: thresholds is None -> Fallback to argmax -> should predict CLEAN (idx 0)
+    classifier.thresholds = None
+    probs = torch.tensor([0.6, 0.39, 0.01])
+    class MockModel:
+        config = DummyConfig()
+        def __call__(self, **kwargs):
+            return MockOutput(probs)
+        def eval(self):
+            pass
+            
+    classifier.model = MockModel()
+    
+    res = classifier.predict("dummy text")
+    assert res["label"] == "CLEAN"
+    assert res["confidence"] == 0.6
+    
+    # Case 2: thresholds is provided -> Cascade Thresholds matching -> should predict OFFENSIVE (idx 1)
+    classifier.thresholds = {"CLEAN": 0.5, "OFFENSIVE": 0.38, "HATE": 0.32}
+    res = classifier.predict("dummy text")
+    assert res["label"] == "OFFENSIVE"
+    assert res["confidence"] == 0.39
+
 if __name__ == "__main__":
     import sys
     class pytest_approx:
@@ -282,5 +327,9 @@ if __name__ == "__main__":
     print("Running test_dynamic_hidden_states_and_attentions...")
     test_dynamic_hidden_states_and_attentions()
     print("test_dynamic_hidden_states_and_attentions passed!")
+    
+    print("Running test_classifier_thresholds_and_fallback...")
+    test_classifier_thresholds_and_fallback()
+    print("test_classifier_thresholds_and_fallback passed!")
     
     print("ALL TESTS PASSED SUCCESSFULLY!")

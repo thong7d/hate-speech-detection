@@ -207,7 +207,7 @@ class HateSpeechClassifier:
         self.label_mapping_path = resolve_path(label_mapping_path or self.artifact_dir / "label_mapping.json")
         self.metadata_path = resolve_path(metadata_path or self.artifact_dir / "metadata.json")
         self.threshold = threshold
-        self.thresholds = thresholds or {"CLEAN": 0.5, "OFFENSIVE": 0.38, "HATE": 0.32}
+        self.thresholds = thresholds
         self.max_length = max_length
         self.device_name = device
         self.use_word_segmentation = use_word_segmentation
@@ -263,32 +263,38 @@ class HateSpeechClassifier:
         self.model.eval()
         with torch.no_grad():
             logits = self.model(**encoding).logits
-            probabilities_tensor = torch.softmax(logits, dim=-1).detach().cpu()[0]
+            probabilities_tensor = torch.nn.functional.softmax(logits, dim=-1).detach().cpu()[0]
 
         probabilities = {
             self.id2label.get(idx, str(idx)): round(float(probabilities_tensor[idx].item()), 4)
             for idx in range(len(probabilities_tensor))
         }
 
-        # Logic so khớp đa ngưỡng động
-        prob_clean = probabilities.get("CLEAN", 0.0)
-        prob_offensive = probabilities.get("OFFENSIVE", 0.0)
-        prob_hate = probabilities.get("HATE", 0.0)
+        # Check if thresholds are valid for cascade matching, otherwise fallback to standard argmax
+        if (
+            self.thresholds is not None 
+            and "HATE" in self.thresholds 
+            and "OFFENSIVE" in self.thresholds
+        ):
+            prob_offensive = probabilities.get("OFFENSIVE", 0.0)
+            prob_hate = probabilities.get("HATE", 0.0)
 
-        thresh_hate = self.thresholds.get("HATE", 0.32)
-        thresh_offensive = self.thresholds.get("OFFENSIVE", 0.38)
+            thresh_hate = self.thresholds["HATE"]
+            thresh_offensive = self.thresholds["OFFENSIVE"]
 
-        if prob_hate >= thresh_hate:
-            pred_id = 2
-            label = "HATE"
-        elif prob_offensive >= thresh_offensive:
-            pred_id = 1
-            label = "OFFENSIVE"
+            if prob_hate >= thresh_hate:
+                pred_id = 2
+            elif prob_offensive >= thresh_offensive:
+                pred_id = 1
+            else:
+                pred_id = 0
         else:
-            pred_id = 0
-            label = "CLEAN"
+            # Standard fallback using argmax
+            pred_id = int(torch.argmax(probabilities_tensor).item())
 
+        label = self.id2label.get(pred_id, str(pred_id))
         confidence = round(float(probabilities_tensor[pred_id].item()), 4)
+
         return {
             "text": original_text,
             "label": label,
