@@ -349,7 +349,10 @@ class HateSpeechClassifier:
                 )
 
                 # Nếu là mô hình xlm-roberta, tự động khởi tạo bằng XLMRobertaTextCNN với trust_remote_code=True
-                if getattr(config, "model_type", None) == "xlm-roberta":
+                if (
+                    getattr(config, "model_type", None) == "xlm-roberta"
+                    and getattr(config, "architectures", [None])[0] == "XLMRobertaTextCNN"
+                ):
                     self.model, loading_info = XLMRobertaTextCNN.from_pretrained(
                         source_value,
                         subfolder=subfolder,
