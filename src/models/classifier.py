@@ -350,13 +350,28 @@ class HateSpeechClassifier:
 
                 # Nếu là mô hình xlm-roberta, tự động khởi tạo bằng XLMRobertaTextCNN với trust_remote_code=True
                 if getattr(config, "model_type", None) == "xlm-roberta":
-                    self.model = XLMRobertaTextCNN.from_pretrained(
+                    self.model, loading_info = XLMRobertaTextCNN.from_pretrained(
                         source_value,
                         subfolder=subfolder,
                         token=token,
                         config=config,
                         trust_remote_code=True,
+                        output_loading_info=True,
                     )
+                    
+                    # Kiểm tra xem có thiếu trọng số head tùy chỉnh không
+                    missing_keys = loading_info.get("missing_keys", [])
+                    custom_head_missing = [k for k in missing_keys if any(hk in k for hk in ["convs", "fc"])]
+                    if custom_head_missing:
+                        import warnings
+                        warnings.warn(
+                            f"\n[CRITICAL WARNING] Trọng số của tầng head tùy chỉnh TextCNN {custom_head_missing} "
+                            f"KHÔNG có trong checkpoint '{source_value}' và đã bị khởi tạo ngẫu nhiên! "
+                            f"Hiệu suất mô hình sẽ bị sụp đổ nghiêm trọng (Weight Mismatch). "
+                            f"Vui lòng đảm bảo bạn đã đẩy đầy đủ checkpoint đã fine-tune của lớp custom "
+                            f"XLMRobertaTextCNN lên Hugging Face Hub hoặc thư mục cục bộ.\n",
+                            RuntimeWarning
+                        )
                 else:
                     self.model = AutoModelForSequenceClassification.from_pretrained(
                         source_value,

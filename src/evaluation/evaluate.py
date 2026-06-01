@@ -54,7 +54,11 @@ except ImportError:
 INSUFFICIENT = "Khong du du lieu de xac minh"
 
 
-def evaluate_from_config(config: dict[str, Any], hf_repo_id: str | None = None) -> dict[str, Any]:
+def evaluate_from_config(
+    config: dict[str, Any], 
+    hf_repo_id: str | None = None,
+    use_argmax: bool = True,
+) -> dict[str, Any]:
     data_cfg = config["data"]
     evaluation_cfg = config["evaluation"]
     export_cfg = config["export"]
@@ -107,6 +111,8 @@ def evaluate_from_config(config: dict[str, Any], hf_repo_id: str | None = None) 
         artifact_dir=export_cfg["artifact_dir"],
         max_length=int(model_cfg.get("max_length", 128)),
         use_word_segmentation=use_word_seg,
+        # Nếu use_argmax là True, ép buộc thresholds = None để kích hoạt fallback argmax
+        thresholds=None if use_argmax else model_cfg.get("thresholds"),
     )
     label2id = label2id_from_mapping(classifier.label_mapping)
     predictions = classifier.predict_batch(canonical["text"].tolist())
@@ -307,6 +313,8 @@ def main() -> None:
     parser.add_argument("--config", default="configs/train.yaml")
     parser.add_argument("--hf_repo_id", default=None, help="Hugging Face repo ID to load model from.")
     parser.add_argument("--use_word_segmentation", default=None, help="Override use_word_segmentation (True/False)")
+    parser.add_argument("--use_argmax", action="store_true", default=True, help="Force standard argmax fallback for metric verification.")
+    parser.add_argument("--no_argmax", action="store_false", dest="use_argmax", help="Disable forced argmax fallback and use configured thresholds instead.")
     args = parser.parse_args()
 
     config = load_yaml_config(args.config)
@@ -316,7 +324,7 @@ def main() -> None:
             config["preprocessing"] = {}
         config["preprocessing"]["use_word_segmentation"] = val
 
-    metrics = evaluate_from_config(config, hf_repo_id=args.hf_repo_id)
+    metrics = evaluate_from_config(config, hf_repo_id=args.hf_repo_id, use_argmax=args.use_argmax)
     print(metrics)
 
 
