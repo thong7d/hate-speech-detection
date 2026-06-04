@@ -331,7 +331,7 @@ class HateSpeechClassifier:
         for source_name, source_value in sources:
             try:
                 token = _env("HF_TOKEN") if source_name == "huggingface" else None
-                subfolder = "model" if source_name == "huggingface" else None
+                subfolder = "" if source_name == "huggingface" else None
 
                 # Đọc cấu hình AutoConfig trước
                 config = AutoConfig.from_pretrained(

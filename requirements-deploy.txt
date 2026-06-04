@@ -13,3 +13,5 @@ PyYAML==6.0.2
 scikit-learn==1.4.2
 numpy<2.0
 underthesea==6.8.4
+pandas==2.2.2
+accelerate==0.29.3
