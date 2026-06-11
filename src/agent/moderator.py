@@ -1,41 +1,45 @@
 """
-Gemini-powered content moderation agent with tool usage.
+Ollama Qwen2.5-powered content moderation agent with tool usage.
 
 Implements the Agentic AI component:
-  1. Multi-step reasoning via Gemini LLM
+  1. Multi-step reasoning via Qwen2.5 LLM
   2. Tool usage: classify_text, detect_language, log_event
-  3. Dynamic decision-making: borderline texts get clarifying questions
+  3. Dynamic decision-making: borderline texts get analyzed by LLM
 """
 import os
 import json
 import hashlib
+import requests
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List, Dict, Any
 
 from langdetect import detect as langdetect_detect
-import google.generativeai as genai
 
 try:
     from src.models.classifier import HateSpeechClassifier
-    from src.data.preprocessing import preprocess_text
 except ImportError:
     from models.classifier import HateSpeechClassifier
-    from data.preprocessing import preprocess_text
 
 
 # ========== TOOL IMPLEMENTATIONS ==========
 
 class ModerationTools:
     """
-    Collection of tools available to the Gemini agent.
+    Collection of tools available to the moderation agent.
     Each tool has a clear input/output contract.
     """
 
-    def __init__(self, model_source: str, log_path: str, device: str = "auto",
-                 use_word_segmentation: bool = True):
+    def __init__(self, classifier: Optional[HateSpeechClassifier] = None, 
+                 model_source: str = "huggingface", 
+                 hf_repo_id: str = "thong7d/vihsd-xlmr-base-hate-speech",
+                 log_path: str = "scratch/system_audit_log.jsonl", 
+                 device: str = "auto",
+                 use_word_segmentation: bool = False):
         """
         Args:
-            model_source: HF model ID or local path to the fine-tuned model.
+            classifier: Pre-loaded HateSpeechClassifier instance. If None, it will be loaded.
+            model_source: 'huggingface' or 'local'.
+            hf_repo_id: HF model ID or local path to the fine-tuned model.
             log_path: Path to the JSONL log file.
             device: 'cuda', 'cpu', or 'auto'.
             use_word_segmentation: Whether to use Vietnamese word segmentation.
@@ -43,36 +47,42 @@ class ModerationTools:
         self.log_path = log_path
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
 
-        # Use unified HateSpeechClassifier instead of separate load_hf_artifacts
-        self.classifier = HateSpeechClassifier(
-            model_source="huggingface",
-            hf_repo_id=model_source,
-            device=device,
-            use_word_segmentation=use_word_segmentation,
-        )
+        if classifier is not None:
+            self.classifier = classifier
+        else:
+            self.classifier = HateSpeechClassifier(
+                model_source=model_source,
+                hf_repo_id=hf_repo_id,
+                device=device,
+                use_word_segmentation=use_word_segmentation,
+            )
 
         self.borderline_low = float(os.environ.get("BORDERLINE_LOW", "0.35"))
         self.borderline_high = float(os.environ.get("BORDERLINE_HIGH", "0.65"))
-        print(f"✅ ModerationTools initialized on {self.classifier.device}")
+        print(f"✅ ModerationTools initialized with classifier on {self.classifier.device}")
 
     def classify_text(self, text: str) -> dict:
         """
-        Tool 1: Classify text for hate speech using the fine-tuned model.
+        Tool 1: Classify text for hate speech using the fine-tuned XLM-R model.
 
         Input:  text (str) — the text to classify
         Output: dict with keys: label, confidence, scores, is_borderline
         """
         result = self.classifier.predict(text)
         confidence = result["confidence"]
+        
+        # Get class probabilities
+        probs = result.get("probabilities", {})
+        
+        # Determine if it's borderline (e.g. confidence below threshold)
+        is_borderline = confidence < 0.65
+
         return {
             "label": result["label"],
-            "label_id": list(self.classifier.id2label.keys())[
-                list(self.classifier.id2label.values()).index(result["label"])
-            ],
             "confidence": confidence,
-            "scores": result["probabilities"],
-            "probabilities": result["probabilities"],
-            "is_borderline": self.borderline_low <= confidence <= self.borderline_high,
+            "scores": probs,
+            "probabilities": probs,
+            "is_borderline": is_borderline,
         }
 
     def detect_language(self, text: str) -> dict:
@@ -89,7 +99,7 @@ class ModerationTools:
         return {"language": lang}
 
     def log_event(self, text: str, label: str, action: str, reason: str,
-                  confidence: float = 0.0, language: str = "vi"):
+                  confidence: float = 0.0, language: str = "vi", agent_processed: str = "NO"):
         """
         Tool 3: Log a moderation event to JSONL file (privacy-safe).
 
@@ -105,6 +115,7 @@ class ModerationTools:
             "confidence": confidence,
             "action": action,
             "reason": reason,
+            "agent_processed": agent_processed
         }
 
         with open(self.log_path, "a", encoding="utf-8") as f:
@@ -113,129 +124,204 @@ class ModerationTools:
         return {"status": "logged", "event_hash": text_hash}
 
 
-# ========== GEMINI AGENT ==========
+# ========== AGENT IMPLEMENTATION ==========
 
-SYSTEM_PROMPT = """You are a content moderation agent for a Vietnamese social platform.
-You have access to 3 tools:
+SYSTEM_PROMPT_SINGLE = (
+    "Bạn là chuyên gia kiểm duyệt nội dung của hệ thống ViHSD. Hãy phân tích sắc thái ngữ nghĩa "
+    "(mỉa mai, châm biếm, từ lóng, ngữ cảnh) của văn bản đầu vào và kết quả phân loại từ mô hình cơ sở. "
+    "Hãy đưa ra quyết định cuối cùng. Chỉ trả về chuỗi JSON duy nhất theo định dạng bắt buộc, không kèm lời dẫn:\n"
+    '{"final_label": "CLEAN"|"OFFENSIVE"|"HATE", "explanation": "Lý do ngắn gọn bằng tiếng Việt"}'
+)
 
-1. classify_text(text: str) → Returns toxicity classification
-   {label: CLEAN/OFFENSIVE/HATE, confidence: float, scores: dict}
-
-2. detect_language(text: str) → Returns language code (vi, en, ...)
-
-3. log_event(text_hash: str, label: str, action: str, reason: str)
-   → Logs moderation decision (privacy-safe: hash only)
-
-Your reasoning process:
-Step 1: Detect the language of the input.
-Step 2: Classify the text using classify_text().
-Step 3: Reason about the result:
-  - If CLEAN with high confidence (>0.7): allow, explain why.
-  - If confidence is low (0.3–0.65) or result is OFFENSIVE/HATE
-    but the text seems ambiguous: ask ONE specific clarifying question
-    tailored to the content (do NOT use generic questions).
-  - If HATE with high confidence (>0.7): block and explain clearly.
-Step 4: After final decision, call log_event().
-Step 5: Respond to the user in Vietnamese.
-
-Always explain your reasoning briefly to the user.
-When asking clarifying questions, be specific about what aspect of the text is ambiguous.
-"""
+SYSTEM_PROMPT_BATCH = (
+    "Bạn là chuyên gia của hệ thống ViHSD. Hãy phân tích mảng dữ liệu đầu vào chứa các câu vùng xám "
+    "và trả về mảng kết quả JSON tương ứng. Định dạng bắt buộc:\n"
+    '[{"id": int, "final_label": "CLEAN"|"OFFENSIVE"|"HATE", "explanation": "Lý do ngắn gọn bằng tiếng Việt"}]'
+)
 
 
 class ContentModerator:
     """
-    Gemini-powered content moderation agent with tool usage.
+    Qwen2.5-powered content moderation agent with tool usage.
 
     Implements multi-step reasoning:
     1. Receive user text
-    2. Use tools to classify and analyze
-    3. Make moderation decision (allow / ask clarification / block)
-    4. Log the decision
+    2. Use tools to detect language and classify
+    3. Determine if LLM agent routing is needed
+    4. Call local Ollama Qwen2.5 backend for borderline reasoning
+    5. Fallback if JSON format or communication fails
+    6. Log the moderation decision
     """
 
-    def __init__(self, tools: ModerationTools, gemini_api_key: str,
-                 gemini_model: str = "gemini-2.0-flash"):
+    def __init__(self, tools: ModerationTools, ollama_endpoint: Optional[str] = None,
+                 model_name: str = "qwen2.5:7b-instruct"):
         """
         Args:
-            tools: ModerationTools instance with loaded model.
-            gemini_api_key: Google Gemini API key.
-            gemini_model: Gemini model name.
+            tools: ModerationTools instance.
+            ollama_endpoint: URL endpoint for the Ollama server.
+            model_name: Name of the Ollama model.
         """
         self.tools = tools
+        self.ollama_endpoint = ollama_endpoint or os.getenv("OLLAMA_ENDPOINT")
+        self.model_name = model_name
+        print(f"✅ ContentModerator initialized with endpoint: {self.ollama_endpoint}")
 
-        genai.configure(api_key=gemini_api_key)
-        self.gemini = genai.GenerativeModel(gemini_model)
-        self.conversation_history = []
-
-        print(f"✅ ContentModerator initialized with {gemini_model}")
-
-    def moderate(self, user_text: str, context: Optional[str] = None) -> str:
+    def moderate(self, user_text: str, force_agent: bool = False) -> Dict[str, Any]:
         """
-        Run the full moderation pipeline on a piece of text.
+        Moderate a single comment. Run the full tool-based moderation pipeline.
 
-        Input:
-            user_text: The text to moderate.
-            context: Optional additional context (e.g., user's clarification).
-
-        Output:
-            str — The agent's response in Vietnamese.
+        Returns:
+            Dict containing final decision labels, confidence, probabilities, 
+            and explanations.
         """
         # Step 1: Detect language
         lang_result = self.tools.detect_language(user_text)
-        # Step 2: Classify text
+        language = lang_result["language"]
+
+        # Step 2: Classify text using baseline XLM-R
         cls_result = self.tools.classify_text(user_text)
+        
+        label = cls_result["label"]
+        confidence = cls_result["confidence"]
+        probs = cls_result["probabilities"]
+        agent_triggered = False
+        explanation = ""
 
-        # Build prompt for Gemini
-        tool_results = (
-            f"Language detection result: {json.dumps(lang_result)}\n"
-            f"Classification result: {json.dumps(cls_result)}"
-        )
+        # Step 3: Determine if routing is needed (e.g. confidence < 0.65 or forced)
+        should_route = force_agent or cls_result["is_borderline"]
+        agent_processed_logged = "NO"
+        log_reason = f"XLM-R baseline confidence={confidence:.4f}"
 
-        if context:
-            user_message = (
-                f"Original text to moderate: \"{user_text}\"\n"
-                f"User provided additional context: \"{context}\"\n"
-                f"Tool results:\n{tool_results}\n\n"
-                f"Based on the classification results and the user's context, "
-                f"make your final moderation decision."
-            )
-        else:
-            user_message = (
-                f"Text to moderate: \"{user_text}\"\n"
-                f"Tool results:\n{tool_results}\n\n"
-                f"Analyze the classification results and make your moderation decision."
-            )
-
-        # Call Gemini
-        try:
-            chat = self.gemini.start_chat(history=[])
-            response = chat.send_message(
-                f"{SYSTEM_PROMPT}\n\n{user_message}"
-            )
-            agent_response = response.text
-        except Exception as e:
-            agent_response = (
-                f"⚠️ Agent error: {str(e)}. "
-                f"Falling back to direct classification: "
-                f"{cls_result['label']} (confidence: {cls_result['confidence']})"
-            )
-
+        if should_route and self.ollama_endpoint:
+            agent_processed_logged = "YES"
+            explanation = "LLM Refusal - Fallback to XLM-R"
+            log_reason = explanation
+            try:
+                prompt_content = {
+                    "text": user_text,
+                    "baseline_classification": {
+                        "label": label,
+                        "confidence": confidence,
+                        "probabilities": probs
+                    },
+                    "language": language
+                }
+                
+                payload = {
+                    "model": self.model_name,
+                    "system": SYSTEM_PROMPT_SINGLE,
+                    "prompt": json.dumps(prompt_content, ensure_ascii=False),
+                    "format": "json",
+                    "stream": False
+                }
+                
+                url = f"{self.ollama_endpoint.rstrip('/')}/api/generate"
+                response = requests.post(url, json=payload, timeout=60)
+                
+                if response.status_code == 200:
+                    res_json = response.json()
+                    response_text = res_json.get("response", "").strip()
+                    
+                    start = response_text.find('{')
+                    end = response_text.rfind('}') + 1
+                    if start == -1 or end == 0:
+                        raise ValueError("JSON delimiters '{' and '}' not found in LLM response")
+                    
+                    json_str = response_text[start:end]
+                    try:
+                        agent_res = json.loads(json_str)
+                    except json.JSONDecodeError as jde:
+                        raise ValueError(f"Failed to parse LLM JSON response: {jde}") from jde
+                    
+                    if not isinstance(agent_res, dict) or "final_label" not in agent_res:
+                        raise ValueError("LLM response JSON is missing 'final_label' key or is not a dictionary")
+                        
+                    final_lbl = agent_res["final_label"]
+                    if final_lbl not in ["CLEAN", "OFFENSIVE", "HATE"]:
+                        raise ValueError(f"LLM final_label '{final_lbl}' is invalid")
+                        
+                    label = final_lbl
+                    explanation = agent_res.get("explanation", "Agent đã tối ưu nhãn dựa trên ngữ cảnh sâu.")
+                    agent_triggered = True
+                    log_reason = explanation
+                else:
+                    raise RuntimeError(f"Ollama API returned non-200 status code: {response.status_code}")
+            except Exception as e:
+                print(f"❌ Connection or processing error with Ollama Agent: {e}")
+                explanation = "LLM Refusal - Fallback to XLM-R"
+                log_reason = "FALLBACK_ERROR"
+        
         # Step 4: Log the event
-        action = "ALLOW" if cls_result["label"] == "CLEAN" else (
-            "REVIEW" if cls_result["is_borderline"] else "BLOCK"
-        )
+        action = "ALLOW" if label == "CLEAN" else ("REVIEW" if cls_result["is_borderline"] else "BLOCK")
         self.tools.log_event(
             text=user_text,
-            label=cls_result["label"],
+            label=label,
             action=action,
-            reason=f"confidence={cls_result['confidence']}",
-            confidence=cls_result["confidence"],
-            language=lang_result["language"],
+            reason=log_reason,
+            confidence=confidence,
+            language=language,
+            agent_processed=agent_processed_logged
         )
 
-        return agent_response
+        return {
+            "text": user_text,
+            "label": label,
+            "confidence": confidence,
+            "probabilities": probs,
+            "agent_triggered": agent_triggered,
+            "explanation": explanation
+        }
 
-    def reset_conversation(self):
-        """Reset conversation history for a new moderation session."""
-        self.conversation_history = []
+    def moderate_batch(self, chunk_preds: List[Dict[str, Any]], borderline_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Perform batch moderation for borderline items. Modifies chunk_preds in-place.
+        
+        Args:
+            chunk_preds: List of prediction structures, e.g. [{"text": str, "pred": dict, "agent_triggered": bool, "explanation": str}]
+            borderline_items: List of borderline dicts, e.g. [{"id": int, "text": str}]
+        
+        Returns:
+            The modified chunk_preds.
+        """
+        if not borderline_items or not self.ollama_endpoint:
+            return chunk_preds
+
+        try:
+            prompt_str = json.dumps(borderline_items, ensure_ascii=False)
+            payload = {
+                "model": self.model_name,
+                "system": SYSTEM_PROMPT_BATCH,
+                "prompt": prompt_str,
+                "format": "json",
+                "stream": False
+            }
+            url = f"{self.ollama_endpoint.rstrip('/')}/api/generate"
+            response = requests.post(url, json=payload, timeout=60)
+            
+            if response.status_code == 200:
+                res_json = response.json()
+                response_text = res_json.get("response", "").strip()
+                
+                agent_results = None
+                try:
+                    start = response_text.find('[')
+                    end = response_text.rfind(']') + 1
+                    if start != -1 and end != -1:
+                        json_str = response_text[start:end]
+                        agent_results = json.loads(json_str)
+                    
+                    if agent_results and isinstance(agent_results, list):
+                        for res_item in agent_results:
+                            if isinstance(res_item, dict) and "id" in res_item and "final_label" in res_item:
+                                orig_id = res_item["id"]
+                                final_lbl = res_item["final_label"]
+                                if 0 <= orig_id < len(chunk_preds) and final_lbl in ["CLEAN", "OFFENSIVE", "HATE"]:
+                                    chunk_preds[orig_id]["pred"]["label"] = final_lbl
+                                    chunk_preds[orig_id]["explanation"] = res_item.get("explanation", "Agent đã tối ưu nhãn.")
+                                    chunk_preds[orig_id]["agent_triggered"] = True
+                except Exception as e:
+                    print(f"❌ Parse JSON batch failed: {e}")
+        except Exception as e:
+            print(f"❌ Connection error to Ollama Agent in batch: {e}")
+            
+        return chunk_preds

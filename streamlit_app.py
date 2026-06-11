@@ -103,60 +103,26 @@ def get_classifier():
     )
     return classifier
 
+@st.cache_resource(show_spinner="Đang khởi tạo Content Moderator Agent...")
+def get_moderator():
+    classifier = get_classifier()
+    from src.agent.moderator import ContentModerator, ModerationTools
+    tools = ModerationTools(
+        classifier=classifier,
+        log_path="scratch/system_audit_log.jsonl"
+    )
+    moderator = ContentModerator(
+        tools=tools,
+        ollama_endpoint=os.getenv("OLLAMA_ENDPOINT")
+    )
+    return moderator
+
 # ==============================================================================
 # INTEGRATED INFRASTRUCTURE: CORE AGENTIC PIPELINE INTERFACE
 # ==============================================================================
 def execute_hybrid_inference(text: str, classifier):
-    pred = classifier.predict(text)
-    
-    label = pred["label"]
-    probs = pred["probabilities"]
-    confidence = pred["confidence"]
-    agent_triggered = False
-    explanation = ""
-
-    # Kích hoạt luồng xử lý Agentic khi mô hình rơi vào vùng xám có độ tự tin thấp < 65%
-    if confidence < 0.65:
-        explanation = "LLM Refusal - Fallback to XLM-R"
-        ollama_endpoint = os.getenv("OLLAMA_ENDPOINT")
-        if ollama_endpoint:
-            try:
-                import requests
-                import json
-                system_prompt = 'Bạn là chuyên gia kiểm duyệt nội dung của hệ thống ViHSD. Hãy phân tích sắc thái ngữ nghĩa (mỉa mai, châm biếm, từ lóng) của văn bản đầu vào. Chỉ trả về chuỗi JSON duy nhất theo định dạng bắt buộc, không kèm lời dẫn: {"final_label": "CLEAN"|"OFFENSIVE"|"HATE", "explanation": "Lý do ngắn gọn"}'
-                payload = {
-                    "model": "qwen2.5:7b-instruct",
-                    "system": system_prompt,
-                    "prompt": text,
-                    "format": "json",
-                    "stream": False
-                }
-                url = f"{ollama_endpoint.rstrip('/')}/api/generate"
-                response = requests.post(url, json=payload, timeout=15)
-                if response.status_code == 200:
-                    res_json = response.json()
-                    response_text = res_json.get("response", "").strip()
-                    try:
-                        agent_res = json.loads(response_text)
-                        if isinstance(agent_res, dict) and "final_label" in agent_res:
-                            final_lbl = agent_res["final_label"]
-                            if final_lbl in ["CLEAN", "OFFENSIVE", "HATE"]:
-                                label = final_lbl
-                                explanation = agent_res.get("explanation", "Agent đã tối ưu nhãn dựa trên ngữ cảnh sâu.")
-                                agent_triggered = True
-                    except json.JSONDecodeError:
-                        pass
-            except Exception:
-                pass # Fallback giữ nguyên nhãn thô của XLM-R nếu API Agent gặp lỗi ngoại lệ
-
-    return {
-        "text": text,
-        "label": label,
-        "confidence": confidence,
-        "probabilities": probs,
-        "agent_triggered": agent_triggered,
-        "explanation": explanation
-    }
+    moderator = get_moderator()
+    return moderator.moderate(text)
 
 # ==============================================================================
 # 3. TRY-EXCEPT-FINALLY HEARTBEAT BACKGROUND BATCH WORKER
@@ -210,53 +176,24 @@ def background_batch_inference_worker(session_id: str, df_raw: pd.DataFrame, out
             # Step 2: Filter borderline texts (confidence < 0.65)
             borderline_items = []
             for i, item in enumerate(chunk_preds):
-                if item["pred"]["confidence"] < 0.65:
+                # Nới lỏng ngưỡng vùng xám để bắt các câu mỉa mai ẩn
+                if item["pred"]["confidence"] < 0.999: 
                     borderline_items.append({
                         "id": i,
                         "text": item["text"]
                     })
                     item["explanation"] = "LLM Refusal - Fallback to XLM-R"
             
-            # Step 3: Call Ollama API in batch (JSON Array) for borderline texts
+            # Step 3: Call Ollama API in batch (JSON Array) for borderline texts using moderator agent
             if borderline_items:
-                ollama_endpoint = os.getenv("OLLAMA_ENDPOINT")
-                if ollama_endpoint:
-                    try:
-                        import requests
-                        import json
-                        system_prompt = (
-                            "Bạn là chuyên gia của hệ thống ViHSD. Hãy phân tích mảng dữ liệu đầu vào và trả về mảng kết quả JSON tương ứng. "
-                            "Định dạng bắt buộc: [{\"id\": int, \"final_label\": \"CLEAN\"|\"OFFENSIVE\"|\"HATE\", \"explanation\": \"string\"}]"
-                        )
-                        prompt_str = json.dumps(borderline_items, ensure_ascii=False)
-                        payload = {
-                            "model": "qwen2.5:7b-instruct",
-                            "system": system_prompt,
-                            "prompt": prompt_str,
-                            "format": "json",
-                            "stream": False
-                        }
-                        url = f"{ollama_endpoint.rstrip('/')}/api/generate"
-                        response = requests.post(url, json=payload, timeout=15)
-                        if response.status_code == 200:
-                            res_json = response.json()
-                            response_text = res_json.get("response", "").strip()
-                            try:
-                                agent_results = json.loads(response_text)
-                                if isinstance(agent_results, list):
-                                    for res_item in agent_results:
-                                        if isinstance(res_item, dict) and "id" in res_item and "final_label" in res_item:
-                                            orig_id = res_item["id"]
-                                            final_lbl = res_item["final_label"]
-                                            if 0 <= orig_id < len(chunk_preds) and final_lbl in ["CLEAN", "OFFENSIVE", "HATE"]:
-                                                chunk_preds[orig_id]["pred"]["label"] = final_lbl
-                                                chunk_preds[orig_id]["explanation"] = res_item.get("explanation", "Agent đã tối ưu nhãn dựa trên ngữ cảnh sâu.")
-                                                chunk_preds[orig_id]["agent_triggered"] = True
-                                                agent_routed_count += 1
-                            except json.JSONDecodeError:
-                                pass
-                    except Exception:
-                        pass # Fallback giữ nguyên nhãn thô của XLM-R
+                try:
+                    moderator = get_moderator()
+                    chunk_preds = moderator.moderate_batch(chunk_preds, borderline_items)
+                    for item in chunk_preds:
+                        if item["agent_triggered"]:
+                            agent_routed_count += 1
+                except Exception as e:
+                    print(f"❌ Lỗi xử lý batch qua Agent: {e}")
             
             # Step 4: Map predictions to results list
             results = []
@@ -275,6 +212,25 @@ def background_batch_inference_worker(session_id: str, df_raw: pd.DataFrame, out
             
             df_chunk_res = pd.DataFrame(results)
             df_chunk_res.to_csv(output_path, mode='a', index=False, header=first_chunk, encoding="utf-8")
+            
+            import hashlib
+            import json
+            from datetime import datetime
+            
+            log_path = "scratch/system_audit_log.jsonl"
+            with open(log_path, "a", encoding="utf-8") as f:
+                for item in results:
+                    text_hash = hashlib.sha256(item["text"].encode("utf-8")).hexdigest()[:16]
+                    log_event = {
+                        "timestamp": datetime.utcnow().isoformat() + "Z",
+                        "text_hash": text_hash,
+                        "label": item["label"],
+                        "confidence": item["confidence"],
+                        "agent_processed": item["agent_processed"],
+                        "explanation": item["explanation"]
+                    }
+                    f.write(json.dumps(log_event, ensure_ascii=False) + "\n")
+
             first_chunk = False
             
             processed += len(chunk)
