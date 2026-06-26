@@ -1,9 +1,8 @@
-# Lấy từ requirements-deploy.txt
-torch==2.2.2
-transformers==4.40.2
+torch>=2.2.0
+transformers>=4.41.0
 sentencepiece==0.2.0
-protobuf==4.25.3
-huggingface_hub==0.23.2
+protobuf>=5.28.0
+huggingface_hub>=0.25.0,<1.0
 fastapi==0.111.0
 uvicorn[standard]==0.29.0
 pydantic==2.7.1
@@ -13,11 +12,9 @@ omegaconf==2.3.0
 PyYAML==6.0.2
 scikit-learn==1.4.2
 numpy<2.0
-underthesea==6.8.4
+underthesea
 pandas==2.2.2
-accelerate==0.29.3
-# Bổ sung Gradio và sacremoses
+accelerate>=0.30.0
 gradio==4.28.3
 sacremoses==0.1.1
 ollama
-
