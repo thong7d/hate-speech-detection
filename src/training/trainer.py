@@ -578,7 +578,7 @@ def _custom_loss_trainer_class(base_trainer):
                     sampler=sampler,
                     collate_fn=self.data_collator,
                     num_workers=self.args.dataloader_num_workers,
-                    pin_memory=self.args.pin_memory,
+                    pin_memory=getattr(self.args, "dataloader_pin_memory", getattr(self.args, "pin_memory", True)),
                 )
             
             return super().get_train_dataloader()
