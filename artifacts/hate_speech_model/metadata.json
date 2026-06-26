@@ -1,0 +1,20 @@
+{
+  "calibration": {
+    "temperature": 3.290757,
+    "method": "weighted_scalar_temperature_scaling",
+    "ece_before": 0.145467,
+    "ece_after": 0.071179,
+    "ece_reduction_pct": 51.07,
+    "argmax_preserved": true,
+    "classwise_ece_before": {
+      "ece_CLEAN": 0.11816,
+      "ece_OFFENSIVE": 0.080524,
+      "ece_HATE": 0.098593
+    },
+    "classwise_ece_after": {
+      "ece_CLEAN": 0.141831,
+      "ece_OFFENSIVE": 0.073803,
+      "ece_HATE": 0.08692
+    }
+  }
+}

@@ -19,3 +19,5 @@ accelerate==0.29.3
 # Bổ sung Gradio và sacremoses
 gradio==4.28.3
 sacremoses==0.1.1
+ollama
+

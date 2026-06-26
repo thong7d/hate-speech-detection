@@ -31,7 +31,10 @@ def load_classifier(config_path: str = "configs/api.yaml") -> HateSpeechClassifi
 
 
 def get_classifier() -> HateSpeechClassifier | None:
-    return classifier or load_classifier()
+    clf = classifier or load_classifier()
+    if clf is not None:
+        clf.check_and_reload()
+    return clf
 
 
 def readiness() -> dict:

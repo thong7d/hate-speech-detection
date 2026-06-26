@@ -73,16 +73,27 @@ class ModerationTools:
         
         # Get class probabilities
         probs = result.get("probabilities", {})
+        probs_raw = result.get("probabilities_raw", probs)
         
-        # Determine if it's borderline (e.g. confidence below threshold)
-        is_borderline = confidence < 0.65
+        # Decoupled minority class routing
+        p_offensive_raw = probs_raw.get("OFFENSIVE", 0.0)
+        p_hate_raw = probs_raw.get("HATE", 0.0)
+        
+        p_offensive_contrib = p_offensive_raw if p_offensive_raw >= 0.01 else 0.0
+        p_hate_contrib = p_hate_raw if p_hate_raw >= 0.01 else 0.0
+        p_toxic_raw = p_offensive_contrib + p_hate_contrib
+        
+        is_borderline = p_toxic_raw >= 0.15
 
         return {
             "label": result["label"],
             "confidence": confidence,
             "scores": probs,
             "probabilities": probs,
+            "probabilities_raw": probs_raw,
             "is_borderline": is_borderline,
+            "toxicity_score": result.get("toxicity_score") or 0.0,
+            "toxic_spans": result.get("toxic_spans") or [],
         }
 
     def detect_language(self, text: str) -> dict:
@@ -216,7 +227,7 @@ class ContentModerator:
                 }
                 
                 url = f"{self.ollama_endpoint.rstrip('/')}/api/generate"
-                response = requests.post(url, json=payload, timeout=60)
+                response = requests.post(url, json=payload, timeout=120)
                 
                 if response.status_code == 200:
                     res_json = response.json()
@@ -269,7 +280,9 @@ class ContentModerator:
             "confidence": confidence,
             "probabilities": probs,
             "agent_triggered": agent_triggered,
-            "explanation": explanation
+            "explanation": explanation,
+            "toxicity_score": cls_result.get("toxicity_score"),
+            "toxic_spans": cls_result.get("toxic_spans")
         }
 
     def moderate_batch(self, chunk_preds: List[Dict[str, Any]], borderline_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -296,7 +309,7 @@ class ContentModerator:
                 "stream": False
             }
             url = f"{self.ollama_endpoint.rstrip('/')}/api/generate"
-            response = requests.post(url, json=payload, timeout=60)
+            response = requests.post(url, json=payload, timeout=300)
             
             if response.status_code == 200:
                 res_json = response.json()

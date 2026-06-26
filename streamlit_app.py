@@ -121,6 +121,8 @@ def get_moderator():
 # INTEGRATED INFRASTRUCTURE: CORE AGENTIC PIPELINE INTERFACE
 # ==============================================================================
 def execute_hybrid_inference(text: str, classifier):
+    if classifier is not None:
+        classifier.check_and_reload()
     moderator = get_moderator()
     return moderator.moderate(text)
 
@@ -146,6 +148,8 @@ def background_batch_inference_worker(session_id: str, df_raw: pd.DataFrame, out
     )
     
     try:
+        if classifier is not None:
+            classifier.check_and_reload()
         text_col = "text" if "text" in df_raw.columns else df_raw.columns[0]
         
         chunk_size = 10
@@ -163,9 +167,10 @@ def background_batch_inference_worker(session_id: str, df_raw: pd.DataFrame, out
             
             # Step 1: Run predictions through XLM-R Base for all rows in the chunk
             chunk_preds = []
+            moderator = get_moderator()
             for idx, row in chunk.iterrows():
                 text = str(row.get(text_col, ""))
-                pred = classifier.predict(text)
+                pred = moderator.tools.classify_text(text)
                 chunk_preds.append({
                     "text": text,
                     "pred": pred,
@@ -173,11 +178,10 @@ def background_batch_inference_worker(session_id: str, df_raw: pd.DataFrame, out
                     "explanation": ""
                 })
             
-            # Step 2: Filter borderline texts (confidence < 0.65)
+            # Step 2: Filter borderline texts using decoupled routing
             borderline_items = []
             for i, item in enumerate(chunk_preds):
-                # Nới lỏng ngưỡng vùng xám để bắt các câu mỉa mai ẩn
-                if item["pred"]["confidence"] < 0.999: 
+                if item["pred"]["is_borderline"]: 
                     borderline_items.append({
                         "id": i,
                         "text": item["text"]
@@ -199,10 +203,14 @@ def background_batch_inference_worker(session_id: str, df_raw: pd.DataFrame, out
             results = []
             for item in chunk_preds:
                 res = item["pred"]
+                spans = res.get("toxic_spans") or []
+                spans_str = ", ".join([f"{span['token']}({span['score']:.4f})" for span in spans])
                 results.append({
                     "text": item["text"],
                     "label": res["label"],
                     "confidence": res["confidence"],
+                    "toxicity_score": res.get("toxicity_score") or 0.0,
+                    "toxic_spans": spans_str,
                     "agent_processed": "YES" if item["agent_triggered"] else "NO",
                     "explanation": item["explanation"],
                     "CLEAN_prob": res["probabilities"].get("CLEAN", 0.0),
@@ -379,11 +387,42 @@ with tab1:
         col1, col2 = st.columns([1, 1])
         
         with col1:
-            st.markdown(f"**Văn bản gốc:** *\"{prediction['text']}\"*")
+            raw_text = prediction['text']
+            toxic_spans = prediction.get('toxic_spans', [])
+            if toxic_spans:
+                import re
+                highlighted_text = raw_text
+                # Sort spans by length of the token descending to match longer strings first
+                clean_tokens = sorted(
+                    list(set(span["token"].strip().lower() for span in toxic_spans if len(span["token"].strip()) > 1)),
+                    key=len,
+                    reverse=True
+                )
+                for tok in clean_tokens:
+                    pattern = re.compile(r'\b(' + re.escape(tok) + r')\b', re.IGNORECASE)
+                    highlighted_text = pattern.sub(r'<mark style="background-color: rgba(239, 68, 68, 0.25); color: #ef4444; padding: 2px 4px; border-radius: 4px; font-weight: bold;">\1</mark>', highlighted_text)
+                st.markdown(f"**Văn bản gốc:** {highlighted_text}", unsafe_allow_html=True)
+            else:
+                st.markdown(f"**Văn bản gốc:** *\"{raw_text}\"*")
+            
             badge_html = render_badge(prediction['label'])
             st.markdown(f"**Nhãn dự đoán:** {badge_html}", unsafe_allow_html=True)
             st.markdown(f"**Độ tin cậy (Confidence):** `{prediction['confidence']:.2%}`")
             st.markdown(f"**Thời gian xử lý:** `{latency_ms:.2f} ms`")
+            
+            if "toxicity_score" in prediction and prediction["toxicity_score"] is not None:
+                st.metric(label="Điểm độc tính (Toxicity Score)", value=f"{prediction['toxicity_score']:.4f}")
+                
+            if toxic_spans:
+                st.markdown("**Từ khóa độc hại phát hiện:**")
+                spans_html = ""
+                for span in toxic_spans:
+                    token = span["token"]
+                    score = span["score"]
+                    color = "#ef4444" if score > 0 else "#ffa366"
+                    spans_html += f'<span style="background-color: {color}15; color: {color}; border: 1px solid {color}33; padding: 4px 8px; border-radius: 6px; margin-right: 6px; font-weight: bold; font-family: monospace; font-size: 13px;">{token} ({score:.4f})</span>'
+                st.markdown(spans_html, unsafe_allow_html=True)
+                st.write("") # Add spacing
             
             if prediction["agent_triggered"]:
                 st.info(f"🤖 **Luồng phân tích Agentic phản biện vùng xám:**\n{prediction['explanation']}")

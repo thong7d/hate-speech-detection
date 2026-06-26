@@ -1,0 +1,13 @@
+features:
+  # Tier A: Toxicity Score
+  enable_toxicity_score: true
+  toxicity_weights:
+    OFFENSIVE: 0.4
+    HATE: 1.0
+
+  # Tier B: Toxic Span Highlighting
+  enable_toxic_spans: true
+  # "gradcam" for fast inference, "integrated_gradients" for deep analysis
+  toxic_spans_method: "gradcam"
+  toxic_spans_top_k: 5
+  toxic_spans_only_toxic: true  # Only compute for OFFENSIVE and HATE classes

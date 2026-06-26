@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import threading
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -199,6 +201,7 @@ class HateSpeechClassifier:
         max_length: int = 128,
         device: str = "auto",
         use_word_segmentation: bool = True,
+        temperature: float | None = None,
     ) -> None:
         self.model_source = model_source
         self.hf_repo_id = hf_repo_id
@@ -218,6 +221,26 @@ class HateSpeechClassifier:
         self.id2label = id2label_from_mapping(self.label_mapping)
         self.metadata = self._load_metadata()
         self.loaded_from = None
+        self.temperature = temperature
+        if self.temperature is None:
+            self.temperature = self.metadata.get("calibration", {}).get("temperature", None)
+        self.features_config = self._load_features_config()
+
+        # Initialize reload variables and check active_version.json
+        self.lock = threading.Lock()
+        self.is_reloading = False
+        self.active_version_path = self.artifact_dir / "active_version.json"
+        
+        if self.active_version_path.exists():
+            try:
+                with self.active_version_path.open("r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    active_path = data.get("active_path")
+                    if active_path:
+                        self.model_path = str(resolve_path(active_path))
+            except Exception as e:
+                print(f"[CLASSIFIER] Warning: failed to read active_version.json: {e}")
+
         self._load()
 
     @classmethod
@@ -239,72 +262,231 @@ class HateSpeechClassifier:
             thresholds=thresholds,
             max_length=int(model_cfg.get("max_length", 128)),
             use_word_segmentation=bool(model_cfg.get("use_word_segmentation", True)),
+            temperature=model_cfg.get("temperature"),
         )
 
     @property
     def model_version(self) -> str:
         return str(self.metadata.get("model_version") or self.metadata.get("version") or "v2.0.0")
 
-    def predict(self, text: str) -> dict:
-        if self.model is None or self.tokenizer is None or self.device is None:
-            raise RuntimeError("Model is not loaded.")
-
-        original_text = "" if text is None else str(text)
-        model_text = preprocess_text(original_text, use_word_segmentation=self.use_word_segmentation)
-        encoding = self.tokenizer(
-            model_text,
-            max_length=self.max_length,
-            padding="max_length",
-            truncation=True,
-            return_tensors="pt",
-        )
-        encoding = {key: value.to(self.device) for key, value in encoding.items()}
-
-        self.model.eval()
-        with torch.no_grad():
-            logits = self.model(**encoding).logits
-            probabilities_tensor = torch.nn.functional.softmax(logits, dim=-1).detach().cpu()[0]
-
-        probabilities = {
-            self.id2label.get(idx, str(idx)): round(float(probabilities_tensor[idx].item()), 4)
-            for idx in range(len(probabilities_tensor))
-        }
-
-        # Check if thresholds are valid for cascade matching, otherwise fallback to standard argmax
-        if (
-            self.thresholds is not None 
-            and "HATE" in self.thresholds 
-            and "OFFENSIVE" in self.thresholds
-        ):
-            prob_offensive = probabilities.get("OFFENSIVE", 0.0)
-            prob_hate = probabilities.get("HATE", 0.0)
-
-            thresh_hate = self.thresholds["HATE"]
-            thresh_offensive = self.thresholds["OFFENSIVE"]
-
-            if prob_hate >= thresh_hate:
-                pred_id = 2
-            elif prob_offensive >= thresh_offensive:
-                pred_id = 1
-            else:
-                pred_id = 0
-        else:
-            # Standard fallback using argmax
-            pred_id = int(torch.argmax(probabilities_tensor).item())
-
-        label = self.id2label.get(pred_id, str(pred_id))
-        confidence = round(float(probabilities_tensor[pred_id].item()), 4)
-
-        return {
+    def _get_fallback_prediction(self, original_text: str, mode: str) -> dict:
+        result = {
             "text": original_text,
-            "label": label,
-            "confidence": confidence,
-            "probabilities": probabilities,
+            "label": "CLEAN",
+            "confidence": 1.0,
+            "probabilities": {"CLEAN": 1.0, "OFFENSIVE": 0.0, "HATE": 0.0},
+            "probabilities_raw": {"CLEAN": 1.0, "OFFENSIVE": 0.0, "HATE": 0.0},
             "model_version": self.model_version,
         }
+        if self.features_config.get("enable_toxicity_score", False) or mode == "analysis":
+            result["toxicity_score"] = 0.0
+        if self.features_config.get("enable_toxic_spans", False) or mode == "analysis":
+            result["toxic_spans"] = []
+        return result
 
-    def predict_batch(self, texts: list[str]) -> list[dict]:
-        return [self.predict(text) for text in texts]
+    def predict(self, text: str, mode: str = "inference") -> dict:
+        original_text = "" if text is None else str(text)
+        if self.is_reloading:
+            return self._get_fallback_prediction(original_text, mode)
+
+        with self.lock:
+            if self.model is None or self.tokenizer is None or self.device is None:
+                return self._get_fallback_prediction(original_text, mode)
+
+            model_text = preprocess_text(original_text, use_word_segmentation=self.use_word_segmentation)
+            encoding = self.tokenizer(
+                model_text,
+                max_length=self.max_length,
+                padding="max_length",
+                truncation=True,
+                return_tensors="pt",
+            )
+            encoding = {key: value.to(self.device) for key, value in encoding.items()}
+
+            self.model.eval()
+            with torch.no_grad():
+                logits_raw = self.model(**encoding).logits
+                logits = logits_raw.clone()
+                if getattr(self, "temperature", None) is not None:
+                    logits = logits / self.temperature
+                probabilities_tensor = torch.nn.functional.softmax(logits, dim=-1).detach().cpu()[0]
+                probabilities_raw_tensor = torch.nn.functional.softmax(logits_raw, dim=-1).detach().cpu()[0]
+
+            probabilities = {
+                self.id2label.get(idx, str(idx)): round(float(probabilities_tensor[idx].item()), 4)
+                for idx in range(len(probabilities_tensor))
+            }
+            probabilities_raw = {
+                self.id2label.get(idx, str(idx)): round(float(probabilities_raw_tensor[idx].item()), 4)
+                for idx in range(len(probabilities_raw_tensor))
+            }
+
+            # Check if thresholds are valid for cascade matching, otherwise fallback to standard argmax
+            if (
+                self.thresholds is not None 
+                and "HATE" in self.thresholds 
+                and "OFFENSIVE" in self.thresholds
+            ):
+                prob_offensive = probabilities.get("OFFENSIVE", 0.0)
+                prob_hate = probabilities.get("HATE", 0.0)
+
+                thresh_hate = self.thresholds["HATE"]
+                thresh_offensive = self.thresholds["OFFENSIVE"]
+
+                if prob_hate >= thresh_hate:
+                    pred_id = 2
+                elif prob_offensive >= thresh_offensive:
+                    pred_id = 1
+                else:
+                    pred_id = 0
+            else:
+                # Standard fallback using argmax
+                pred_id = int(torch.argmax(probabilities_tensor).item())
+
+            label = self.id2label.get(pred_id, str(pred_id))
+            confidence = round(float(probabilities_tensor[pred_id].item()), 4)
+
+            result = {
+                "text": original_text,
+                "label": label,
+                "confidence": confidence,
+                "probabilities": probabilities,
+                "probabilities_raw": probabilities_raw,
+                "model_version": self.model_version,
+            }
+
+            # Tier A: Toxicity Score
+            if self.features_config.get("enable_toxicity_score", False) or mode == "analysis":
+                try:
+                    from src.features.toxicity_score import compute_toxicity_score
+                except ImportError:
+                    from features.toxicity_score import compute_toxicity_score
+                
+                weights = self.features_config.get("toxicity_weights", {"OFFENSIVE": 0.4, "HATE": 1.0})
+                result["toxicity_score"] = compute_toxicity_score(probabilities, weights=weights)
+
+            # Tier B: Toxic Spans Highlight
+            if self.features_config.get("enable_toxic_spans", False) or mode == "analysis":
+                only_toxic = self.features_config.get("toxic_spans_only_toxic", True)
+                if mode == "analysis" or not only_toxic or label in ("OFFENSIVE", "HATE"):
+                    method = "integrated_gradients" if mode == "analysis" else self.features_config.get("toxic_spans_method", "gradcam")
+                    top_k = self.features_config.get("toxic_spans_top_k", 5)
+                    target_class_idx = pred_id
+
+                    try:
+                        if method == "integrated_gradients":
+                            try:
+                                from src.features.toxic_spans import extract_toxic_spans_ig
+                            except ImportError:
+                                from features.toxic_spans import extract_toxic_spans_ig
+                            result["toxic_spans"] = extract_toxic_spans_ig(
+                                self.model, self.tokenizer, model_text, target_class=target_class_idx, top_k=top_k
+                            )
+                        else:  # default to gradcam
+                            try:
+                                from src.features.toxic_spans import extract_toxic_spans_gradcam
+                            except ImportError:
+                                from features.toxic_spans import extract_toxic_spans_gradcam
+                            result["toxic_spans"] = extract_toxic_spans_gradcam(
+                                self.model, self.tokenizer, model_text, target_class=target_class_idx, top_k=top_k
+                            )
+                    except Exception as e:
+                        import warnings
+                        warnings.warn(f"Failed to extract toxic spans: {e}")
+                        result["toxic_spans"] = []
+
+            return result
+
+    def predict_batch(self, texts: list[str], mode: str = "inference") -> list[dict]:
+        import inspect
+        sig = inspect.signature(self.predict)
+        if "mode" in sig.parameters:
+            return [self.predict(text, mode=mode) for text in texts]
+        else:
+            return [self.predict(text) for text in texts]
+
+    def get_raw_logits_batch(self, texts: list[str]) -> np.ndarray:
+        if self.is_reloading:
+            return np.zeros((len(texts), len(self.id2label)))
+
+        with self.lock:
+            if self.model is None or self.tokenizer is None or self.device is None:
+                raise RuntimeError("Model is not loaded.")
+            
+            self.model.eval()
+            all_logits = []
+            batch_size = 32
+            with torch.no_grad():
+                for i in range(0, len(texts), batch_size):
+                    batch_texts = texts[i:i + batch_size]
+                    preprocessed = [preprocess_text(t, use_word_segmentation=self.use_word_segmentation) for t in batch_texts]
+                    encoding = self.tokenizer(
+                        preprocessed,
+                        max_length=self.max_length,
+                        padding="max_length",
+                        truncation=True,
+                        return_tensors="pt",
+                    )
+                    encoding = {key: value.to(self.device) for key, value in encoding.items()}
+                    # Extract raw logits directly from the model (uncalibrated, no temperature scaling)
+                    logits = self.model(**encoding).logits
+                    all_logits.append(logits.detach().cpu().numpy())
+            return np.vstack(all_logits)
+
+    def reload_model(self, model_path: str) -> None:
+        import gc
+        # Kích hoạt ngoài khối lock để các luồng predict rẽ nhánh sang fallback lập tức
+        self.is_reloading = True
+        
+        try:
+            with self.lock:
+                self.model_path = str(resolve_path(model_path))
+                
+                # Clear references to trigger garbage collection
+                self.model = None
+                self.tokenizer = None
+                
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                
+                # Reload mapping and metadata
+                self.label_mapping_path = resolve_path(self.artifact_dir / "label_mapping.json")
+                self.metadata_path = resolve_path(self.artifact_dir / "metadata.json")
+                self.label_mapping = load_label_mapping(self.label_mapping_path, DEFAULT_LABELS)
+                self.id2label = id2label_from_mapping(self.label_mapping)
+                self.metadata = self._load_metadata()
+                
+                # Re-apply temperature from metadata if not explicitly set
+                if self.temperature is None or self.temperature == self.metadata.get("calibration", {}).get("temperature", None):
+                    self.temperature = self.metadata.get("calibration", {}).get("temperature", None)
+                
+                # Reload model
+                self._load()
+        finally:
+            self.is_reloading = False
+
+    def check_and_reload(self) -> bool:
+        """Checks if active_version.json specifies a different path from self.model_path,
+        and if so, calls reload_model. Returns True if reload was triggered, False otherwise.
+        """
+        if not self.active_version_path.exists():
+            return False
+        try:
+            with self.active_version_path.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+                active_path = data.get("active_path")
+                if active_path:
+                    resolved_active = str(resolve_path(active_path))
+                    # Compare absolute normalized paths
+                    if os.path.abspath(resolved_active) != os.path.abspath(self.model_path):
+                        print(f"[CLASSIFIER] Active path changed from {self.model_path} to {resolved_active}. Reloading...")
+                        self.reload_model(resolved_active)
+                        return True
+        except Exception as e:
+            print(f"[CLASSIFIER] Error checking active_version.json: {e}")
+        return False
+
 
     def _load(self) -> None:
         from transformers import AutoConfig, AutoModelForSequenceClassification, AutoTokenizer
@@ -413,6 +595,24 @@ class HateSpeechClassifier:
             "model_version": "v2.0.0",
             "note": "Khong du du lieu de xac minh metadata artifact.",
         }
+
+    def _load_features_config(self) -> dict[str, Any]:
+        try:
+            from src.utils.config import load_yaml_config
+            return load_yaml_config("configs/features.yaml").get("features", {})
+        except Exception:
+            try:
+                from utils.config import load_yaml_config
+                return load_yaml_config("configs/features.yaml").get("features", {})
+            except Exception:
+                return {
+                    "enable_toxicity_score": True,
+                    "toxicity_weights": {"OFFENSIVE": 0.4, "HATE": 1.0},
+                    "enable_toxic_spans": True,
+                    "toxic_spans_method": "gradcam",
+                    "toxic_spans_top_k": 5,
+                    "toxic_spans_only_toxic": True,
+                }
 
 
 def _env(name: str) -> str | None:

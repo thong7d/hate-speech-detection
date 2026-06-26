@@ -218,12 +218,21 @@ def train_from_config(config: dict[str, Any]) -> dict[str, Any]:
     focal_gamma = float(training_cfg.get("focal_gamma", 2.0))
     layerwise_lr_decay = float(training_cfg.get("layerwise_lr_decay", 0.0))
 
+    if loss_name == "focal" and label_smoothing > 0.0:
+        print("[WARNING] Focal Loss is incompatible with label smoothing > 0.0. Falling back to cross_entropy.")
+        loss_name = "cross_entropy"
+
     if loss_name == "focal" and not class_weights:
         weights_by_id = compute_balanced_class_weights(train_df["label"].tolist(), num_labels)
         class_weights = [float(weights_by_id[idx]) for idx in range(num_labels)]
 
+    # Extract sample weight if present in dataframe (for continual learning sampler)
+    sample_weights = None
+    if "sample_weight" in train_df.columns:
+        sample_weights = train_df["sample_weight"].tolist()
+
     # Determine trainer class
-    use_custom_trainer = bool(class_weights or loss_name == "focal" or layerwise_lr_decay > 0)
+    use_custom_trainer = bool(class_weights or loss_name == "focal" or layerwise_lr_decay > 0 or sample_weights is not None)
     trainer_cls = _custom_loss_trainer_class(Trainer) if use_custom_trainer else Trainer
     trainer_kwargs: dict[str, Any] = {}
     if use_custom_trainer:
@@ -233,6 +242,7 @@ def train_from_config(config: dict[str, Any]) -> dict[str, Any]:
                 "loss_name": loss_name,
                 "focal_gamma": focal_gamma,
                 "layerwise_lr_decay": layerwise_lr_decay,
+                "sample_weights": sample_weights,
             }
         )
 
@@ -508,6 +518,7 @@ def _custom_loss_trainer_class(base_trainer):
             loss_name: str,
             focal_gamma: float,
             layerwise_lr_decay: float = 0.0,
+            sample_weights: list[float] | None = None,
             **kwargs,
         ) -> None:
             super().__init__(*args, **kwargs)
@@ -515,6 +526,32 @@ def _custom_loss_trainer_class(base_trainer):
             self.loss_name = loss_name
             self.focal_gamma = focal_gamma
             self.layerwise_lr_decay = layerwise_lr_decay
+            self.sample_weights = sample_weights
+
+        def get_train_dataloader(self):
+            if self.train_dataset is None:
+                raise ValueError("Trainer: training requires a train_dataset.")
+                
+            if self.sample_weights is not None:
+                import torch
+                from torch.utils.data import DataLoader, WeightedRandomSampler
+                
+                sampler = WeightedRandomSampler(
+                    weights=self.sample_weights,
+                    num_samples=len(self.sample_weights),
+                    replacement=True
+                )
+                
+                return DataLoader(
+                    self.train_dataset,
+                    batch_size=self.args.train_batch_size,
+                    sampler=sampler,
+                    collate_fn=self.data_collator,
+                    num_workers=self.args.dataloader_num_workers,
+                    pin_memory=self.args.pin_memory,
+                )
+            
+            return super().get_train_dataloader()
 
         def create_optimizer(self):
             """Override to implement layer-wise learning rate decay (LLRD).
@@ -635,7 +672,7 @@ def _custom_loss_trainer_class(base_trainer):
                     nll = nll * weights.gather(0, labels)
                 loss = ((1 - pt) ** self.focal_gamma * nll).mean()
             elif self.loss_name in {"cross_entropy", "ce"}:
-                loss = F.cross_entropy(logits, labels, weight=weights)
+                loss = F.cross_entropy(logits, labels, weight=weights, label_smoothing=self.args.label_smoothing_factor)
             else:
                 raise ValueError("training.loss must be one of: cross_entropy, focal")
             return (loss, outputs) if return_outputs else loss
