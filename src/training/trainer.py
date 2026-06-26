@@ -151,11 +151,11 @@ def train_from_config(config: dict[str, Any]) -> dict[str, Any]:
     tokenizer = AutoTokenizer.from_pretrained(model_cfg["base_model"], trust_remote_code=True)
     from transformers import AutoConfig
     try:
-        config = AutoConfig.from_pretrained(model_cfg["base_model"], trust_remote_code=True)
+        auto_config = AutoConfig.from_pretrained(model_cfg["base_model"], trust_remote_code=True)
         is_xlm_roberta = (
             "xlm-roberta" in model_cfg["base_model"].lower()
-            or getattr(config, "model_type", None) == "xlm-roberta"
-            or (getattr(config, "architectures", None) and config.architectures[0] == "XLMRobertaTextCNN")
+            or getattr(auto_config, "model_type", None) == "xlm-roberta"
+            or (getattr(auto_config, "architectures", None) and auto_config.architectures[0] == "XLMRobertaTextCNN")
         )
     except Exception:
         is_xlm_roberta = "xlm-roberta" in model_cfg["base_model"].lower()
