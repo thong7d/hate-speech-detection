@@ -181,31 +181,40 @@ def train_from_config(config: dict[str, Any]) -> dict[str, Any]:
 
     hf_token = __import__("os").environ.get("HF_TOKEN")
     push_to_hub = bool(hf_token and export_cfg.get("hf_repo_id"))
-    args = TrainingArguments(
-        output_dir=str(output_dir),
-        learning_rate=float(training_cfg.get("learning_rate", 2e-5)),
-        per_device_train_batch_size=int(training_cfg.get("batch_size", 16)),
-        per_device_eval_batch_size=int(training_cfg.get("eval_batch_size", training_cfg.get("batch_size", 16))),
-        num_train_epochs=float(training_cfg.get("num_epochs", 3)),
-        weight_decay=float(training_cfg.get("weight_decay", 0.01)),
-        warmup_ratio=float(training_cfg.get("warmup_ratio", 0.1)),
-        evaluation_strategy="epoch",
-        save_strategy="epoch",
-        load_best_model_at_end=True,
-        metric_for_best_model=metric_for_best_model,
-        greater_is_better=bool(training_cfg.get("greater_is_better", True)),
-        save_total_limit=int(training_cfg.get("save_total_limit", 2)),
-        fp16=bool(training_cfg.get("fp16", False)),
-        max_grad_norm=float(training_cfg.get("max_grad_norm", 1.0)),
-        gradient_accumulation_steps=gradient_accumulation_steps,
-        label_smoothing_factor=label_smoothing,
-        report_to=[],
-        seed=seed,
-        push_to_hub=push_to_hub,
-        hub_model_id=export_cfg.get("hf_repo_id") if push_to_hub else None,
-        hub_strategy="checkpoint",  # Chỉ đồng bộ checkpoint mới nhất lên Hub
-        hub_token=hf_token if push_to_hub else None,
-    )
+    import inspect
+    training_args_kwargs = {
+        "output_dir": str(output_dir),
+        "learning_rate": float(training_cfg.get("learning_rate", 2e-5)),
+        "per_device_train_batch_size": int(training_cfg.get("batch_size", 16)),
+        "per_device_eval_batch_size": int(training_cfg.get("eval_batch_size", training_cfg.get("batch_size", 16))),
+        "num_train_epochs": float(training_cfg.get("num_epochs", 3)),
+        "weight_decay": float(training_cfg.get("weight_decay", 0.01)),
+        "warmup_ratio": float(training_cfg.get("warmup_ratio", 0.1)),
+        "save_strategy": "epoch",
+        "load_best_model_at_end": True,
+        "metric_for_best_model": metric_for_best_model,
+        "greater_is_better": bool(training_cfg.get("greater_is_better", True)),
+        "save_total_limit": int(training_cfg.get("save_total_limit", 2)),
+        "fp16": bool(training_cfg.get("fp16", False)),
+        "max_grad_norm": float(training_cfg.get("max_grad_norm", 1.0)),
+        "gradient_accumulation_steps": gradient_accumulation_steps,
+        "label_smoothing_factor": label_smoothing,
+        "report_to": [],
+        "seed": seed,
+        "push_to_hub": push_to_hub,
+        "hub_model_id": export_cfg.get("hf_repo_id") if push_to_hub else None,
+        "hub_strategy": "checkpoint",  # Chỉ đồng bộ checkpoint mới nhất lên Hub
+        "hub_token": hf_token if push_to_hub else None,
+    }
+    
+    # Resolve version compatibility for evaluation_strategy vs eval_strategy
+    sig = inspect.signature(TrainingArguments.__init__)
+    if "eval_strategy" in sig.parameters:
+        training_args_kwargs["eval_strategy"] = "epoch"
+    else:
+        training_args_kwargs["evaluation_strategy"] = "epoch"
+        
+    args = TrainingArguments(**training_args_kwargs)
     callbacks = []
     if int(training_cfg.get("early_stopping_patience", 0)) > 0:
         callbacks.append(
