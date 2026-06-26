@@ -113,6 +113,8 @@ def run_continual_learning(
     
     # In continual learning, we fall back to standard Cross-Entropy for label smoothing stability
     config["training"]["loss"] = "cross_entropy"
+    # Disable class weighting to prevent extreme gradient updates from destroying pre-trained knowledge
+    config["training"]["class_weighting"] = "none"
     
     # Disable augmentations that are intended only for initial baseline training
     for aug in ["robustness_augmentation", "contrastive_augmentation", "diacritic_augmentation", "class_oversampling"]:
