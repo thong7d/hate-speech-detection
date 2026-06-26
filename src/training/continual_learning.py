@@ -85,6 +85,16 @@ def run_continual_learning(
     config["data"]["valid_path"] = output_dev_parquet
     config["data"]["test_path"] = vihsd_test
     
+    # In continual learning, we start from the existing fine-tuned baseline model weights
+    local_base_model = os.path.join(output_dir, "model")
+    if os.path.exists(local_base_model) and os.path.exists(os.path.join(local_base_model, "config.json")):
+        config["model"]["base_model"] = local_base_model
+        print(f"[CL] Starting continual learning from local base model: {local_base_model}")
+    else:
+        hf_base_model = config["export"].get("hf_repo_id", "thong7d/vihsd-xlmr-base-hate-speech")
+        config["model"]["base_model"] = hf_base_model
+        print(f"[CL] Starting continual learning from Hugging Face base model: {hf_base_model}")
+        
     # Override hyperparameters
     config["training"]["learning_rate"] = float(lr)
     config["training"]["num_epochs"] = int(epochs)
