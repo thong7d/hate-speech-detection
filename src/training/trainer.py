@@ -280,7 +280,7 @@ def train_from_config(config: dict[str, Any]) -> dict[str, Any]:
     resume_from_checkpoint = None
     if output_dir.exists():
         # Quét tìm tất cả các thư mục dạng checkpoint-* thực tế trong thư mục đầu ra (bao gồm cả đệ quy)
-        checkpoints = list(output_dir.glob("**/checkpoint-*"))
+        checkpoints = [p for p in output_dir.glob("**/checkpoint-*") if p.name.split("-")[-1].isdigit()]
         if checkpoints:
             # Sắp xếp danh sách dựa trên chỉ số bước (step) huấn luyện tăng dần
             checkpoints.sort(key=lambda x: int(x.name.split("-")[-1]))
