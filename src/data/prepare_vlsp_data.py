@@ -21,11 +21,32 @@ def prepare_data(
 
     # 1. Load and merge VLSP-2019 raw files
     vlsp_dir_path = Path(vlsp_dir)
+    
+    # Path resolution fallback for Google Drive mounting variations
+    if not (vlsp_dir_path / "02_train_text.csv").exists() or not (vlsp_dir_path / "03_train_label.csv").exists():
+        str_path = str(vlsp_dir)
+        if "MyDrive" in str_path:
+            fallback_str = str_path.replace("MyDrive", "My Drive")
+            fallback_path = Path(fallback_str)
+            if (fallback_path / "02_train_text.csv").exists() and (fallback_path / "03_train_label.csv").exists():
+                print(f"[PREPARE] Fallback: Using '{fallback_str}' instead of '{str_path}'")
+                vlsp_dir_path = fallback_path
+        elif "My Drive" in str_path:
+            fallback_str = str_path.replace("My Drive", "MyDrive")
+            fallback_path = Path(fallback_str)
+            if (fallback_path / "02_train_text.csv").exists() and (fallback_path / "03_train_label.csv").exists():
+                print(f"[PREPARE] Fallback: Using '{fallback_str}' instead of '{str_path}'")
+                vlsp_dir_path = fallback_path
+
     text_path = vlsp_dir_path / "02_train_text.csv"
     label_path = vlsp_dir_path / "03_train_label.csv"
 
     if not text_path.exists() or not label_path.exists():
-        raise FileNotFoundError(f"VLSP raw data files not found in {vlsp_dir}")
+        raise FileNotFoundError(
+            f"VLSP raw data files not found in {vlsp_dir} (or tried fallback). "
+            "Please ensure you uploaded '02_train_text.csv' and '03_train_label.csv' "
+            "to your Google Drive folder."
+        )
 
     df_vlsp_text = pd.read_csv(text_path)
     df_vlsp_label = pd.read_csv(label_path)
