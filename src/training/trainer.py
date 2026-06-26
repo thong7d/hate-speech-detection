@@ -149,7 +149,18 @@ def train_from_config(config: dict[str, Any]) -> dict[str, Any]:
     print(f"[TRAIN] Label distribution: {train_df['label'].value_counts().to_dict()}")
 
     tokenizer = AutoTokenizer.from_pretrained(model_cfg["base_model"], trust_remote_code=True)
-    if "xlm-roberta" in model_cfg["base_model"].lower():
+    from transformers import AutoConfig
+    try:
+        config = AutoConfig.from_pretrained(model_cfg["base_model"], trust_remote_code=True)
+        is_xlm_roberta = (
+            "xlm-roberta" in model_cfg["base_model"].lower()
+            or getattr(config, "model_type", None) == "xlm-roberta"
+            or (getattr(config, "architectures", None) and config.architectures[0] == "XLMRobertaTextCNN")
+        )
+    except Exception:
+        is_xlm_roberta = "xlm-roberta" in model_cfg["base_model"].lower()
+
+    if is_xlm_roberta:
         from src.models.classifier import XLMRobertaTextCNN
         model = XLMRobertaTextCNN.from_pretrained(
             model_cfg["base_model"],
@@ -300,7 +311,7 @@ def train_from_config(config: dict[str, Any]) -> dict[str, Any]:
     final_model_dir = resolve_path(export_cfg["final_model_dir"])
     final_model_dir.mkdir(parents=True, exist_ok=True)
 
-    if "xlm-roberta" in model_cfg["base_model"].lower():
+    if is_xlm_roberta:
         from src.models.classifier import XLMRobertaTextCNN
         # Register ONLY the custom architecture, DO NOT register built-in XLMRobertaConfig
         XLMRobertaTextCNN.register_for_auto_class("AutoModelForSequenceClassification")

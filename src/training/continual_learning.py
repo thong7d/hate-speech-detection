@@ -57,6 +57,12 @@ def run_continual_learning(
 ) -> None:
     print("[CL] Starting Continual Learning Pipeline...")
     
+    # Clean up previous training checkpoint residue to avoid contamination and ValueError on resume mismatch
+    checkpoint_dir = Path(output_dir) / "checkpoint"
+    if checkpoint_dir.exists():
+        print(f"[CL] Clearing previous training residue at {checkpoint_dir}...")
+        shutil.rmtree(checkpoint_dir)
+            
     # 1. Prepare VLSP + Rehearsal data
     output_train_parquet = "data/processed/continual_train.parquet"
     output_dev_parquet = "data/processed/continual_dev.parquet"
