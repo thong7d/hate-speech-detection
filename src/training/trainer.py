@@ -255,16 +255,26 @@ def train_from_config(config: dict[str, Any]) -> dict[str, Any]:
             }
         )
 
-    trainer = trainer_cls(
-        model=model,
-        args=args,
-        train_dataset=train_dataset,
-        eval_dataset=valid_dataset,
-        tokenizer=tokenizer,
-        compute_metrics=compute_metrics,
-        callbacks=callbacks,
-        **trainer_kwargs,
-    )
+    # Resolve version compatibility for tokenizer vs processing_class in Trainer
+    import inspect
+    trainer_kwargs_main = {
+        "model": model,
+        "args": args,
+        "train_dataset": train_dataset,
+        "eval_dataset": valid_dataset,
+        "compute_metrics": compute_metrics,
+        "callbacks": callbacks,
+    }
+    
+    trainer_sig = inspect.signature(Trainer.__init__)
+    if "processing_class" in trainer_sig.parameters:
+        trainer_kwargs_main["processing_class"] = tokenizer
+    else:
+        trainer_kwargs_main["tokenizer"] = tokenizer
+        
+    trainer_kwargs_main.update(trainer_kwargs)
+    
+    trainer = trainer_cls(**trainer_kwargs_main)
 
     output_dir = __import__("pathlib").Path(output_dir)
     resume_from_checkpoint = None
