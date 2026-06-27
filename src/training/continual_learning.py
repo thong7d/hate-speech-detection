@@ -113,8 +113,8 @@ def run_continual_learning(
     
     # In continual learning, we fall back to standard Cross-Entropy for label smoothing stability
     config["training"]["loss"] = "cross_entropy"
-    # Disable class weighting to prevent extreme gradient updates from destroying pre-trained knowledge
-    config["training"]["class_weighting"] = "none"
+    # Enable moderate class weighting to prevent forgetting of minority classes without destroying precision
+    config["training"]["class_weighting"] = "sqrt_balanced"
     # Freeze roberta.encoder during the first epoch to protect pre-trained features
     config["training"]["freeze_backbone_first_epoch"] = True
     
