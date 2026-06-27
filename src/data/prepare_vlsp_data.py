@@ -90,12 +90,12 @@ def prepare_data(
     df_continual_train = pd.concat([df_vlsp_train, df_rehearsal], ignore_index=True)
 
     # 4. Calculate sampling weights for PyTorch WeightedRandomSampler
-    # Target batch ratio: 25% ViHSD (rehearsal) and 75% VLSP (new data)
+    # Target batch ratio: 40% ViHSD (rehearsal) and 60% VLSP (new data)
     n_vihsd = len(df_rehearsal)
     n_vlsp = len(df_vlsp_train)
 
-    w_vihsd = 0.25 / n_vihsd if n_vihsd > 0 else 0.0
-    w_vlsp = 0.75 / n_vlsp if n_vlsp > 0 else 0.0
+    w_vihsd = 0.40 / n_vihsd if n_vihsd > 0 else 0.0
+    w_vlsp = 0.60 / n_vlsp if n_vlsp > 0 else 0.0
 
     df_continual_train["sample_weight"] = df_continual_train["source"].map(
         {"vihsd": w_vihsd, "vlsp": w_vlsp}

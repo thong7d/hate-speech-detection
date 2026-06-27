@@ -73,7 +73,7 @@ def run_continual_learning(
         vihsd_dev_path=vihsd_dev,
         output_train_path=output_train_parquet,
         output_dev_path=output_dev_parquet,
-        rehearsal_size=2500,
+        rehearsal_size=4000,
         dev_size=500,
         seed=42
     )
@@ -113,8 +113,8 @@ def run_continual_learning(
     
     # In continual learning, we fall back to standard Cross-Entropy for label smoothing stability
     config["training"]["loss"] = "cross_entropy"
-    # Disable class weighting to prevent extreme gradient updates from destroying pre-trained knowledge
-    config["training"]["class_weighting"] = "none"
+    # Enable moderate class weighting to prevent forgetting of minority classes without destroying precision
+    config["training"]["class_weighting"] = "sqrt_balanced"
     
     # Disable augmentations that are intended only for initial baseline training
     for aug in ["robustness_augmentation", "contrastive_augmentation", "diacritic_augmentation", "class_oversampling"]:
