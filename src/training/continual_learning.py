@@ -105,7 +105,7 @@ def run_continual_learning(
     config["training"]["learning_rate"] = float(lr)
     config["training"]["num_epochs"] = int(epochs)
     config["training"]["batch_size"] = int(batch_size)
-    config["training"]["label_smoothing"] = float(label_smoothing)
+    config["training"]["label_smoothing"] = 0.1
     config["training"]["output_dir"] = os.path.join(output_dir, "checkpoint")
     config["export"]["artifact_dir"] = output_dir
     config["export"]["final_model_dir"] = os.path.join(output_dir, "model")
@@ -113,8 +113,10 @@ def run_continual_learning(
     
     # In continual learning, we fall back to standard Cross-Entropy for label smoothing stability
     config["training"]["loss"] = "cross_entropy"
-    # Enable moderate class weighting to prevent forgetting of minority classes without destroying precision
-    config["training"]["class_weighting"] = "sqrt_balanced"
+    # Disable class weighting to prevent extreme gradient updates from destroying pre-trained knowledge
+    config["training"]["class_weighting"] = "none"
+    # Freeze roberta.encoder during the first epoch to protect pre-trained features
+    config["training"]["freeze_backbone_first_epoch"] = True
     
     # Disable augmentations that are intended only for initial baseline training
     for aug in ["robustness_augmentation", "contrastive_augmentation", "diacritic_augmentation", "class_oversampling"]:

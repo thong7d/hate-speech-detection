@@ -184,6 +184,21 @@ def train_from_config(config: dict[str, Any]) -> dict[str, Any]:
             trust_remote_code=False,
         )
 
+    # Patch load_state_dict to dynamically map beta -> bias and gamma -> weight for LayerNorm
+    original_load_state_dict = model.load_state_dict
+    def patched_load_state_dict(state_dict, strict=True):
+        new_state_dict = {}
+        for k, v in state_dict.items():
+            new_key = k
+            if ".LayerNorm." in new_key or ".layer_norm." in new_key:
+                if new_key.endswith(".beta"):
+                    new_key = new_key[:-4] + "bias"
+                elif new_key.endswith(".gamma"):
+                    new_key = new_key[:-5] + "weight"
+            new_state_dict[new_key] = v
+        return original_load_state_dict(new_state_dict, strict=strict)
+    model.load_state_dict = patched_load_state_dict
+
     max_length = int(model_cfg.get("max_length", 128))
     train_dataset = ViHSDDataset(train_df["text"].tolist(), train_df["label"].tolist(), tokenizer, max_length)
     valid_dataset = ViHSDDataset(valid_df["text"].tolist(), valid_df["label"].tolist(), tokenizer, max_length)
@@ -239,6 +254,25 @@ def train_from_config(config: dict[str, Any]) -> dict[str, Any]:
                 early_stopping_patience=int(training_cfg.get("early_stopping_patience", 2))
             )
         )
+
+    if training_cfg.get("freeze_backbone_first_epoch", False):
+        from transformers import TrainerCallback
+        class FreezeBackboneCallback(TrainerCallback):
+            def __init__(self, model):
+                self.model = model
+            def on_epoch_begin(self, args, state, control, **kwargs):
+                epoch = int(round(state.epoch))
+                if epoch == 0:
+                    print("[CALLBACK] Freezing roberta.encoder for Epoch 1...")
+                    if hasattr(self.model, "roberta") and hasattr(self.model.roberta, "encoder"):
+                        for param in self.model.roberta.encoder.parameters():
+                            param.requires_grad = False
+                else:
+                    print(f"[CALLBACK] Unfreezing roberta.encoder for Epoch {epoch + 1}...")
+                    if hasattr(self.model, "roberta") and hasattr(self.model.roberta, "encoder"):
+                        for param in self.model.roberta.encoder.parameters():
+                            param.requires_grad = True
+        callbacks.append(FreezeBackboneCallback(model))
 
     loss_name = str(training_cfg.get("loss", "cross_entropy")).lower()
     focal_gamma = float(training_cfg.get("focal_gamma", 2.0))
