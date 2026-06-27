@@ -137,13 +137,28 @@ def run_continual_learning(
     
     # 4. Gatekeeper check
     print("[CL] Starting Gatekeeper Check...")
-    # Load newly trained model (without calibration first)
+    
+    # Load thresholds from api config or use default optimal thresholds
+    api_config_path = "configs/api.yaml"
+    thresholds = {"CLEAN": 0.5, "OFFENSIVE": 0.38, "HATE": 0.32}
+    if os.path.exists(api_config_path):
+        try:
+            with open(api_config_path, "r", encoding="utf-8") as f:
+                api_cfg = yaml.safe_load(f)
+                if "model" in api_cfg and "thresholds" in api_cfg["model"]:
+                    thresholds = api_cfg["model"]["thresholds"]
+                    print(f"[GATEKEEPER] Loaded thresholds from api config: {thresholds}")
+        except Exception as e:
+            print(f"[GATEKEEPER] Warning reading api thresholds: {e}")
+
+    # Load newly trained model (with thresholds)
     new_classifier = HateSpeechClassifier(
         model_source="local",
         model_path=os.path.join(output_dir, "model"),
         artifact_dir=output_dir,
         device="auto",
-        use_word_segmentation=False
+        use_word_segmentation=False,
+        thresholds=thresholds
     )
     
     # Evaluate new model on original ViHSD test set
