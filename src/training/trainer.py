@@ -152,11 +152,17 @@ def train_from_config(config: dict[str, Any]) -> dict[str, Any]:
     from transformers import AutoConfig
     try:
         auto_config = AutoConfig.from_pretrained(model_cfg["base_model"], trust_remote_code=True)
-        is_xlm_roberta = (
-            "xlm-roberta" in model_cfg["base_model"].lower()
-            or getattr(auto_config, "model_type", None) == "xlm-roberta"
-            or (getattr(auto_config, "architectures", None) and auto_config.architectures[0] == "XLMRobertaTextCNN")
-        )
+        archs = getattr(auto_config, "architectures", []) or []
+        model_type = getattr(auto_config, "model_type", "")
+        
+        if any("TextCNN" in a for a in archs):
+            is_xlm_roberta = True
+        elif any("SequenceClassification" in a for a in archs):
+            is_xlm_roberta = False
+        elif any("XLMRoberta" in a or "Roberta" in a for a in archs) or model_type == "xlm-roberta":
+            is_xlm_roberta = True
+        else:
+            is_xlm_roberta = "xlm-roberta" in model_cfg["base_model"].lower()
     except Exception:
         is_xlm_roberta = "xlm-roberta" in model_cfg["base_model"].lower()
 
