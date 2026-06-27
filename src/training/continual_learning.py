@@ -54,6 +54,7 @@ def run_continual_learning(
     batch_size: int,
     label_smoothing: float,
     zip_path: str | None,
+    vlsp_part: str = "all",
 ) -> None:
     print("[CL] Starting Continual Learning Pipeline...")
     
@@ -75,7 +76,8 @@ def run_continual_learning(
         output_dev_path=output_dev_parquet,
         rehearsal_size=4000,
         dev_size=500,
-        seed=42
+        seed=42,
+        vlsp_part=vlsp_part
     )
     
     # 2. Generate temp CL configuration based on configs/train.yaml
@@ -226,18 +228,35 @@ def run_continual_learning(
         
     # 6. Packaging model version zip if zip_path is specified
     if zip_path:
-        print(f"[CL] Zipping model artifacts to {zip_path}...")
+        print(f"[CL] Zipping model artifacts (excluding checkpoints) to {zip_path}...")
         zip_dir = Path(zip_path).parent
         if zip_dir:
             zip_dir.mkdir(parents=True, exist_ok=True)
             
-        # Zip all files under output_dir
+        # Zip files under output_dir, excluding the massive checkpoint directories
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zip_file:
             for root, dirs, files in os.walk(output_dir):
+                # Skip Trainer checkpoints which take up gigabytes of space
+                if "checkpoint" in Path(root).parts:
+                    continue
                 for file in files:
                     file_path = os.path.join(root, file)
                     arcname = os.path.relpath(file_path, output_dir)
                     zip_file.write(file_path, arcname)
+
+        # Create a lightweight reports-only ZIP file (contains only json, txt, csv, md)
+        reports_zip_path = zip_path.replace(".zip", "_reports.zip")
+        print(f"[CL] Zipping lightweight reports to {reports_zip_path}...")
+        with zipfile.ZipFile(reports_zip_path, 'w', zipfile.ZIP_DEFLATED) as r_zip:
+            for root, dirs, files in os.walk(output_dir):
+                # Skip checkpoints and weights
+                if "checkpoint" in Path(root).parts or "model" in Path(root).parts:
+                    continue
+                for file in files:
+                    if file.endswith((".json", ".txt", ".md", ".csv")):
+                        file_path = os.path.join(root, file)
+                        arcname = os.path.relpath(file_path, output_dir)
+                        r_zip.write(file_path, arcname)
                     
         # Write .success file atomically AFTER zip is completely written
         success_marker_path = f"{zip_path}.success"
@@ -265,6 +284,7 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=16, help="Batch size for training")
     parser.add_argument("--label-smoothing", type=float, default=0.15, help="Label smoothing strength")
     parser.add_argument("--zip-path", default="artifacts/CL_output.zip", help="Path to output zip file (set None to skip zipping)")
+    parser.add_argument("--vlsp-part", default="all", choices=["all", "1", "2"], help="VLSP split part for sequential CL")
     args = parser.parse_args()
     
     run_continual_learning(
@@ -277,7 +297,8 @@ def main() -> None:
         lr=args.lr,
         batch_size=args.batch_size,
         label_smoothing=args.label_smoothing,
-        zip_path=args.zip_path if args.zip_path.lower() != "none" else None
+        zip_path=args.zip_path if args.zip_path.lower() != "none" else None,
+        vlsp_part=args.vlsp_part
     )
 
 
