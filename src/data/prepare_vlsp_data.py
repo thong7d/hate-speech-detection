@@ -13,7 +13,8 @@ def prepare_data(
     output_dev_path: str,
     rehearsal_size: int = 2500,
     dev_size: int = 500,
-    seed: int = 42
+    seed: int = 42,
+    vlsp_part: str = "all"
 ):
     print(f"[PREPARE] VLSP raw directory: {vlsp_dir}")
     print(f"[PREPARE] ViHSD train path: {vihsd_train_path}")
@@ -21,11 +22,32 @@ def prepare_data(
 
     # 1. Load and merge VLSP-2019 raw files
     vlsp_dir_path = Path(vlsp_dir)
+    
+    # Path resolution fallback for Google Drive mounting variations
+    if not (vlsp_dir_path / "02_train_text.csv").exists() or not (vlsp_dir_path / "03_train_label.csv").exists():
+        str_path = str(vlsp_dir)
+        if "MyDrive" in str_path:
+            fallback_str = str_path.replace("MyDrive", "My Drive")
+            fallback_path = Path(fallback_str)
+            if (fallback_path / "02_train_text.csv").exists() and (fallback_path / "03_train_label.csv").exists():
+                print(f"[PREPARE] Fallback: Using '{fallback_str}' instead of '{str_path}'")
+                vlsp_dir_path = fallback_path
+        elif "My Drive" in str_path:
+            fallback_str = str_path.replace("My Drive", "MyDrive")
+            fallback_path = Path(fallback_str)
+            if (fallback_path / "02_train_text.csv").exists() and (fallback_path / "03_train_label.csv").exists():
+                print(f"[PREPARE] Fallback: Using '{fallback_str}' instead of '{str_path}'")
+                vlsp_dir_path = fallback_path
+
     text_path = vlsp_dir_path / "02_train_text.csv"
     label_path = vlsp_dir_path / "03_train_label.csv"
 
     if not text_path.exists() or not label_path.exists():
-        raise FileNotFoundError(f"VLSP raw data files not found in {vlsp_dir}")
+        raise FileNotFoundError(
+            f"VLSP raw data files not found in {vlsp_dir} (or tried fallback). "
+            "Please ensure you uploaded '02_train_text.csv' and '03_train_label.csv' "
+            "to your Google Drive folder."
+        )
 
     df_vlsp_text = pd.read_csv(text_path)
     df_vlsp_label = pd.read_csv(label_path)
@@ -35,6 +57,21 @@ def prepare_data(
     df_vlsp = df_vlsp.rename(columns={"free_text": "text", "label_id": "label"})
     df_vlsp = df_vlsp[["text", "label"]].dropna()
     df_vlsp["label"] = df_vlsp["label"].astype(int)
+
+    # Split VLSP into two halves if requested for sequential continual learning
+    if str(vlsp_part) in ("1", "2"):
+        part1, part2 = train_test_split(
+            df_vlsp,
+            test_size=0.5,
+            stratify=df_vlsp["label"],
+            random_state=seed
+        )
+        if str(vlsp_part) == "1":
+            df_vlsp = part1
+            print(f"[PREPARE] Using VLSP Part 1 (size={len(df_vlsp)})")
+        else:
+            df_vlsp = part2
+            print(f"[PREPARE] Using VLSP Part 2 (size={len(df_vlsp)})")
 
     # Split VLSP-2019 into train and dev (90/10 stratified)
     df_vlsp_train, df_vlsp_dev = train_test_split(
@@ -69,12 +106,12 @@ def prepare_data(
     df_continual_train = pd.concat([df_vlsp_train, df_rehearsal], ignore_index=True)
 
     # 4. Calculate sampling weights for PyTorch WeightedRandomSampler
-    # Target batch ratio: 25% ViHSD (rehearsal) and 75% VLSP (new data)
+    # Target batch ratio: 40% ViHSD (rehearsal) and 60% VLSP (new data)
     n_vihsd = len(df_rehearsal)
     n_vlsp = len(df_vlsp_train)
 
-    w_vihsd = 0.25 / n_vihsd if n_vihsd > 0 else 0.0
-    w_vlsp = 0.75 / n_vlsp if n_vlsp > 0 else 0.0
+    w_vihsd = 0.40 / n_vihsd if n_vihsd > 0 else 0.0
+    w_vlsp = 0.60 / n_vlsp if n_vlsp > 0 else 0.0
 
     df_continual_train["sample_weight"] = df_continual_train["source"].map(
         {"vihsd": w_vihsd, "vlsp": w_vlsp}
@@ -93,13 +130,14 @@ def prepare_data(
         random_state=seed
     )
 
-    # Stratified sampling of VLSP dev
-    df_vlsp_dev_sampled, _ = train_test_split(
-        df_vlsp_dev,
-        train_size=min(dev_size, len(df_vlsp_dev)),
-        stratify=df_vlsp_dev["label"],
-        random_state=seed
-    )
+    df_vlsp_dev_sampled = df_vlsp_dev
+    if len(df_vlsp_dev) > dev_size:
+        df_vlsp_dev_sampled, _ = train_test_split(
+            df_vlsp_dev,
+            train_size=dev_size,
+            stratify=df_vlsp_dev["label"],
+            random_state=seed
+        )
 
     df_vihsd_dev_sampled = df_vihsd_dev_sampled.copy()
     df_vlsp_dev_sampled = df_vlsp_dev_sampled.copy()
@@ -143,6 +181,7 @@ def main():
     parser.add_argument("--rehearsal-size", type=int, default=2500, help="Size of rehearsal buffer")
     parser.add_argument("--dev-size", type=int, default=500, help="Size of validation samples from each dataset")
     parser.add_argument("--seed", type=int, default=42, help="RNG seed")
+    parser.add_argument("--vlsp-part", default="all", choices=["all", "1", "2"], help="VLSP split part for sequential CL")
     args = parser.parse_args()
 
     prepare_data(
@@ -153,7 +192,8 @@ def main():
         output_dev_path=args.output_dev,
         rehearsal_size=args.rehearsal_size,
         dev_size=args.dev_size,
-        seed=args.seed
+        seed=args.seed,
+        vlsp_part=args.vlsp_part
     )
 
 if __name__ == "__main__":

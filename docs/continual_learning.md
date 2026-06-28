@@ -1,95 +1,105 @@
-# Chiến lược Giám sát và Học liên tục (Continual Learning & Monitoring Strategy)
+# Continual Learning & Monitoring Strategy
 
-Tài liệu này mô tả chi tiết chiến lược học liên tục (Continual Learning - CL) và hệ thống giám sát trực tuyến để duy trì hiệu năng ổn định của mô hình XLM-R Base phân loại ngôn từ thù ghét trên môi trường sản phẩm thực tế. Tài liệu được thiết kế theo các tiêu chuẩn MLOps sản xuất, giải quyết triệt để các rủi ro hệ thống ở cấp độ concurrency (đồng thời), hệ điều hành Windows và kiến trúc quản lý bộ nhớ RAM.
+This document describes the sequential Continual Learning (CL) pipeline and online monitoring system designed to maintain the stable performance of the XLM-R Base hate speech classifier in real-world production environments. The design follows MLOps production standards and addresses system risks at the concurrency, Windows OS, and memory management levels.
 
 ---
 
-## 1. Pipeline Thực hiện Học liên tục qua Google Colab (Chu trình MLOps)
+## 1. Continual Learning Pipeline via Google Colab (MLOps Cycle)
 
-Để đảm bảo tính tái lập (reproducibility) và tính ổn định cao, hệ thống thiết kế pipeline học liên tục theo kiến trúc **MLOps Hybrid (Colab GPU + Local CPU Serving)**:
+To ensure reproducibility and high stability, the CL pipeline follows a **Hybrid MLOps Architecture (Colab GPU + Local CPU Serving)**:
 
 ```
-[Nhánh Git: cl-pipeline] ------------> Git clone trực tiếp trên Colab GPU
-[Drive: /MyDrive/CL_data/] ----------> Mount trực tiếp làm nguồn dữ liệu thô
-                                               |
-                                               v
-                                [Google Colab (Môi trường GPU)]
-                                - Chạy CL (WeightedSampler, Soft targets, device="cuda")
-                                - Đóng gói kết quả thành CL_output.zip đẩy lên Drive
-                                - Tạo tệp trống CL_output.zip.success báo hiệu hoàn tất 100%
-                                               |
-                                               v
-[Máy Local CPU] <------------------- Phát hiện file .success xuất hiện
-- Chạy deploy_cl_model.py
-- Giải nén vào model_staging_<timestamp>/ (Tránh tranh chấp I/O đệm tĩnh)
-- Khởi chạy Load Test kiểm thử tính toàn vẹn (Chống lệch môi trường)
-- Thao tác Nguyên tử Windows: Đổi tên thư mục bằng os.replace() + 3 lần Retry
-  - Nếu thất bại hoàn toàn -> Thư mục đệm động bị cô lập, không gây nghẽn chu kỳ sau
-- Bật cờ is_reloading = True trước khối lock của reload_model (Tránh nghẽn predict song song)
-- Giải phóng RAM/VRAM cũ chủ động (self.model = None, gc.collect())
-- Bảo vệ đa luồng bằng threading.Lock 
-- Nạp trọng số mới & Cập nhật active_version.json (Hot-Reloading an toàn)
+[Git Branch: cl-pipeline] ────────────► Git clone directly on Colab GPU
+[Google Drive: /MyDrive/CL_data/] ───► Mounted directly as raw data source
+                                               │
+                                               ▼
+                              [Google Colab (GPU Environment)]
+                              - Runs CL (WeightedSampler, Soft targets, device="cuda")
+                              - Packages output into CL_output.zip and uploads to Drive
+                              - Creates an empty CL_output.zip.success marker file
+                                               │
+                                               ▼
+[Local CPU Machine] ◄──────────────── Detects the .success marker file
+- Runs deploy_cl_model.py
+- Extracts into model_staging_<timestamp>/ (avoids static I/O buffer contention)
+- Runs load test to verify model integrity (guards against environment mismatch)
+- Windows Atomic Operation: Rename directory using os.replace() + 3-retry loop
+  - On complete failure → dynamic staging dir is isolated, does not block next cycle
+- Sets is_reloading = True flag before the reload_model lock (prevents predict deadlock)
+- Actively frees old RAM/VRAM (self.model = None, gc.collect())
+- Thread-safe via threading.Lock
+- Loads new weights & updates active_version.json (safe Hot-Reloading)
 ```
 
-### Bước 1: Khớp nối dữ liệu & Tạo tập dữ liệu CL (Validation hỗn hợp)
-1. **Khớp nối nội bộ (Inner Merge)**: Hợp nhất `02_train_text.csv` và `03_train_label.csv` của VLSP-2019 theo cột `id`. Gán nhãn `0` -> `CLEAN`, `1` -> `OFFENSIVE`, `2` -> `HATE`. Thêm trường `source` = `"vlsp"`.
-2. **Rehearsal Buffer**: Lấy mẫu phân tầng 2,500 dòng từ tập huấn luyện ViHSD gốc (`data/processed/train.parquet`). Thêm trường `source` = `"vihsd"`.
-3. **Gộp tập Huấn luyện**: Ghép (Concatenate) dữ liệu VLSP và Rehearsal Buffer thành tập huấn luyện liên tục `data/processed/continual_train.parquet`.
-4. **Hóa giải Validation Strategy Bias (Tập xác thực hỗn hợp)**: Trộn phân tầng tỷ lệ 50/50 giữa `vlsp_dev.parquet` (500 dòng) và tập dev gốc ViHSD `data/processed/dev.parquet` (500 dòng) để tạo thành `continual_dev.parquet`.
+### Step 1: Data Merging & CL Dataset Creation (Mixed Validation)
+1. **Inner Merge**: Join `02_train_text.csv` and `03_train_label.csv` from VLSP-2019 by the `id` column. Map labels `0` → `CLEAN`, `1` → `OFFENSIVE`, `2` → `HATE`. Add `source` field = `"vlsp"`.
+2. **Rehearsal Buffer**: Stratified sample of 2,500 rows from the original ViHSD training split (`data/processed/train.parquet`). Add `source` field = `"vihsd"`.
+3. **Training Set Assembly**: Concatenate VLSP data and the Rehearsal Buffer into `data/processed/continual_train.parquet`.
+4. **Resolving Validation Bias (Mixed Validation Set)**: Create a 50/50 stratified mix of `vlsp_dev.parquet` (500 rows) and the original ViHSD dev split `data/processed/dev.parquet` (500 rows) → `continual_dev.parquet`.
 
-### Bước 2: DataLoader với `WeightedRandomSampler` chống Lệch phân phối Rehearsal
-Sử dụng PyTorch `WeightedRandomSampler` để kiểm soát tỷ lệ trộn ở mức **từng Batch huấn luyện**:
-* Trọng số mẫu ViHSD = $\frac{0.25}{N_{\text{vihsd\_train}}}$
-* Trọng số mẫu VLSP = $\frac{0.75}{N_{\text{vlsp\_train}}}$
-Mỗi Batch có kích thước 32 mẫu được bốc lên sẽ chứa trung bình **8 mẫu ViHSD (25%) và 24 mẫu VLSP (75%)**, đảm bảo gradient bộ nhớ cũ được cập nhật liên tục và đồng đều trong mỗi bước tối ưu.
+### Step 2: DataLoader with `WeightedRandomSampler` to Counter Rehearsal Imbalance
+Uses PyTorch `WeightedRandomSampler` to control the mixing ratio at the **per-batch training level**:
+- ViHSD sample weight = $\frac{0.25}{N_{\text{vihsd\_train}}}$
+- VLSP sample weight = $\frac{0.75}{N_{\text{vlsp\_train}}}$
 
-### Bước 3: Hóa giải xung đột toán học Focal Loss và Label Smoothing
-Khi tiến hành chu kỳ học liên tục có kích hoạt Label Smoothing ($\alpha=0.15$), hệ thống tự động tạm thời chuyển đổi hàm mất mát từ Focal Loss về **Cross-Entropy Loss tiêu chuẩn** hỗ trợ nhãn mềm (Soft Targets) để đảm bảo gradient hội tụ ổn định và chính xác.
+Each batch of 32 samples will contain on average **8 ViHSD samples (25%) and 24 VLSP samples (75%)**, ensuring memory gradients are continuously and uniformly updated at each optimization step.
 
-### Bước 4: Chạy huấn luyện và Đóng gói mô hình trên Colab
-1. Huấn luyện mô hình gia tăng trên Colab GPU trong **3 epochs** với tốc độ học thấp $LR = 1.0 \times 10^{-5}$.
-2. Chạy đánh giá Gatekeeper trên tập test ViHSD gốc, yêu cầu Macro F1 không suy giảm quá 1% so với baseline cũ (F1 $\ge 64.61\%$).
-3. Chạy recalibrate nhiệt độ ECE trên tập xác thực hỗn hợp để cập nhật nhiệt độ $T$ mới vào `metadata.json`.
-4. Nén thư mục phiên bản mới thành `CL_output.zip` và copy lên Google Drive.
-5. **Cơ chế tệp đánh dấu `.success` (Tránh đọc tệp ZIP chưa tải xong)**: Colab sau khi upload xong 100% tệp `CL_output.zip` sẽ tạo một tệp trống tên là `CL_output.zip.success` và lưu cùng thư mục trên Google Drive. Tiến trình local chỉ kích hoạt khi thấy file `.success` này.
+### Step 3: Resolving Focal Loss / Label Smoothing Mathematical Conflict
+When a CL cycle activates Label Smoothing ($\alpha=0.15$), the system automatically switches the loss function from Focal Loss to **standard Cross-Entropy Loss with soft target support** to ensure stable and accurate gradient convergence.
 
-### Bước 5: Triển khai nguyên tử và Hot-Reloading chống sụt RAM trên Local CPU
-Tiến trình giải nén và nạp được tự động hóa qua script [deploy_cl_model.py](file:///d:/000MINHTHONG/Junior%20-%20Semester%20II/ANLPB/FinalProject/hate-speech-detection/src/export/deploy_cl_model.py):
-1. **Giải nén vào thư mục Đệm Động (Dynamic Staging)**: 
-   * Giải nén file `CL_output.zip` vào thư mục đệm có tên động chứa dấu thời gian: `artifacts/hate_speech_model/model_staging_<timestamp>/`.
-   * **Giải phóng hoàn toàn Deadlock Windows**: Trên Windows, khi một file bên trong thư mục đang bị hệ thống hoặc chương trình diệt virus khóa, việc di chuyển hay đổi tên thư mục đệm tĩnh là bất khả thi. Nhờ cơ chế thư mục đệm mang tên động, nếu chu kỳ CL trước bị lỗi khóa file, chu kỳ CL tiếp theo sẽ tạo một thư mục đệm động mới với timestamp khác để chạy bình thường mà không bị chặn bởi PermissionError.
-2. **Kiểm thử nạp (Load Test Integrity)**: Chạy test nạp thử mô hình mới vào RAM, thực hiện suy luận nháp trên 1 câu ví dụ mẫu. Nếu có lỗi, chặn đứng tiến trình.
-3. **Thao tác Nguyên tử Windows bằng `os.replace`**: Sử dụng `os.replace()` để ép buộc ghi đè mạnh mẽ và bọc trong vòng lặp thử lại tối đa 3 lần, giãn cách 1 giây để xử lý các khóa file tạm thời của Windows.
-4. **Hot-Reloading chống sụt RAM & Chống nghẽn luồng predict**:
-   * **Chống nghẽn luồng predict**: Khi bắt đầu chạy lệnh nạp mô hình mới `reload_model()`, cờ `self.is_reloading = True` phải được thiết lập **phía trước** khối khóa luồng `with self.lock:`. Điều này giúp các request suy luận song song gọi vào `predict()` phát hiện ngay trạng thái reload và lập tức rẽ nhánh sang kết quả fallback an toàn (`"CLEAN"`, confidence `1.0`, note reload) mà không bị Block đứng chờ luồng nạp giải phóng khóa (mất 1-2 giây).
-   * **RAM Cleanup**: Trong khối `with self.lock:`, hệ thống ngắt liên kết mô hình cũ (`self.model = None`), gọi trình dọn rác Python (`import gc; gc.collect()`) để thu hồi toàn bộ RAM cũ trước khi tiến hành nạp trọng số mới.
+### Step 4: Training and Model Packaging on Colab
+1. Train incrementally on Colab GPU for **3 epochs** with a low learning rate $LR = 1.0 \times 10^{-5}$.
+2. Run the **Gatekeeper** evaluation on the original ViHSD test set. Requires Macro F1 to not degrade by more than 1% compared to the previous baseline (F1 $\ge 64.61\%$).
+3. Run temperature ECE recalibration on the mixed validation set to update the temperature $T$ in `metadata.json`.
+4. Compress the new version directory into `CL_output.zip` and copy to Google Drive.
+5. **`.success` file mechanism (prevents reading an incomplete ZIP)**: After 100% upload, Colab creates an empty file `CL_output.zip.success` in the same Drive directory. The local process only activates upon detecting this file.
 
----
-
-## 2. Thu thập dữ liệu thực tế & Vòng phản hồi (Feedback Loop)
-
-Dữ liệu mới phục vụ cho các chu kỳ học liên tục tiếp theo được tích lũy liên tục qua:
-1. **Borderline Audit Logs**: Các câu thuộc vùng xám được đưa sang LLM Agent sẽ được lưu lại trong `scratch/system_audit_log.jsonl` làm dữ liệu mẫu tự động.
-2. **Cơ chế HITL (Human-in-the-Loop)**: Giao diện Streamlit cho phép quản trị viên duyệt và hiệu chỉnh nhãn lỗi trước khi xuất tập rehearsal.
-3. **Active Learning**: Ưu tiên chọn các câu có độ bất định cao để gán nhãn thủ công bổ sung.
+### Step 5: Atomic Deployment and Hot-Reloading on Local CPU
+Extraction and loading are automated via [`src/export/deploy_cl_model.py`](../src/export/deploy_cl_model.py):
+1. **Dynamic Staging Directory**: Extract `CL_output.zip` into a timestamp-named staging directory: `artifacts/hate_speech_model/model_staging_<timestamp>/`.
+2. **Load Integrity Test**: Load the new model into RAM and run a dry-run inference on a sample sentence. Halt on any error.
+3. **Windows Atomic Replacement via `os.replace`**: Use `os.replace()` for a strong forced overwrite, wrapped in a 3-retry loop with 1-second delays to handle temporary Windows file locks.
+4. **RAM-safe Hot-Reloading & Predict Deadlock Prevention**:
+   - **Predict Deadlock Prevention**: Set `self.is_reloading = True` **before** the `with self.lock:` block, so concurrent `predict()` calls immediately fallback to a safe result (`"CLEAN"`, confidence `1.0`, reload note) without blocking.
+   - **RAM Cleanup**: Inside the lock block, unlink the old model (`self.model = None`) and call Python's garbage collector (`gc.collect()`) before loading new weights.
 
 ---
 
-## 3. Chỉ số Giám sát & Phát hiện Độ lệch (Drift Detection)
+## 2. Real-World Data Collection & Feedback Loop
 
-| Chỉ số Giám sát | Công thức / Định nghĩa | Ngưỡng Cảnh báo & Hành vi |
+New data for subsequent CL cycles is accumulated continuously via:
+1. **Borderline Audit Logs**: Grey-area samples routed to the LLM Agent are saved in `scratch/system_audit_log.jsonl` as automatic training material.
+2. **HITL (Human-in-the-Loop)**: The Streamlit interface allows administrators to review and correct mislabeled samples before exporting rehearsal data.
+3. **Active Learning**: Prioritize high-uncertainty samples for additional manual annotation.
+
+---
+
+## 3. Monitoring Metrics & Drift Detection
+
+| Monitoring Metric | Formula / Definition | Alert Threshold & Behavior |
 | :--- | :--- | :--- |
-| **Routing Ratio (RR)** | Tỷ lệ số câu chuyển tiếp sang LLM Agent. | Nếu RR vượt quá **30%** liên tục trong 7 ngày $\to$ Cảnh báo phân phối đầu vào bị lệch (Covariate Shift). |
-| **Prediction Label Drift** | Lệch phân phối nhãn đầu ra hàng ngày. | Nếu tỷ lệ một nhãn (ví dụ HATE) biến động quá **15%** $\to$ Cảnh báo có sự thay đổi hành vi người dùng hoặc trôi nhãn. |
-| **Mean Confidence Score** | Giá trị trung bình của độ tin cậy dự đoán. | Nếu giảm liên tục dưới **0.75** $\to$ Cảnh báo mô hình mất năng lực phân loại trên miền dữ liệu thực tế mới. |
+| **Routing Ratio (RR)** | Fraction of inputs forwarded to the LLM Agent. | If RR exceeds **30%** continuously for 7 days → Covariate Shift warning. |
+| **Prediction Label Drift** | Daily output label distribution shift. | If any label (e.g. HATE) fluctuates by more than **15%** → User behavior change or label drift warning. |
+| **Mean Confidence Score** | Average of all prediction confidence values. | If consistently below **0.75** → Model capability degradation warning on new data domain. |
 
 ---
 
-## 4. Rủi ro về Drift & Chiến lược Giảm thiểu
+## 4. Drift Risks & Mitigation Strategies
 
-* **Concept Drift**: Ngữ nghĩa từ lóng thay đổi theo thời gian.
-  - *Giảm thiểu*: Cập nhật định kỳ từ điển chuẩn hóa teencode trong tiền xử lý và thu thập các câu phân tích từ LLM Agent.
-* **Covariate Shift**: Sự xuất hiện của các chủ đề mới đột ngột.
-  - *Giảm thiểu*: Huấn luyện gia tăng với tập Rehearsal Buffer trộn dữ liệu gốc để giữ vững nền tảng kiến thức cũ.
-* **Label Noise**: Bất đồng bộ tiêu chuẩn gán nhãn giữa các dự án.
-  - *Giảm thiểu*: Áp dụng **Label Smoothing ($\alpha=0.15$)** và đánh giá nghiêm ngặt qua Gatekeeper.
+| Drift Type | Risk | Mitigation |
+| :--- | :--- | :--- |
+| **Concept Drift** | Slang semantics evolve over time | Periodically update the teencode normalization dictionary and harvest LLM Agent analysis samples |
+| **Covariate Shift** | New topics emerge suddenly | Incremental training with a Rehearsal Buffer mixing original data to retain prior knowledge |
+| **Label Noise** | Inconsistent labeling standards across datasets | Apply **Label Smoothing ($\alpha=0.15$)** and enforce strict Gatekeeper evaluation before deployment |
+
+---
+
+## 5. Empirical CL Results
+
+| Round | Training Data | Validation Set | Macro F1 | OFFENSIVE F1 | HATE F1 |
+| :--- | :--- | :--- | :---: | :---: | :---: |
+| **Baseline (ViHSD only)** | ViHSD train (18,638) | ViHSD dev | **64.61%** | 41.13% | 59.09% |
+| **CL Round 1** | VLSP Part 1 + ViHSD rehearsal (4,000) | Mixed (ViHSD 500 + VLSP 500) | See `results/cl_step1_metrics.json` | — | — |
+| **CL Round 2** | VLSP Part 2 + ViHSD rehearsal (4,000) | Mixed (ViHSD 500 + VLSP 500) | See `results/cl_step2_metrics.json` | — | — |
+
+> **Note on performance drop**: A Macro F1 decline after CL is expected and acceptable. The VLSP-2019 dataset uses a different annotation scheme and domain (political commentary vs. ViHSD's social media comments), causing distributional shift. The rehearsal buffer and Gatekeeper threshold mitigate catastrophic forgetting while allowing the model to adapt to the new domain.

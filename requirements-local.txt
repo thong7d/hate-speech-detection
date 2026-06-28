@@ -1,0 +1,18 @@
+# Local serving dependencies (Streamlit GUI + Gradio Demo + Agent)
+# Extends requirements.txt with GUI and agent dependencies.
+# Install: pip install -r requirements-local.txt
+
+-r requirements.txt
+
+# --- GUI: Streamlit Admin Dashboard ---
+streamlit>=1.35.0
+plotly>=5.22.0
+
+# --- GUI: Gradio Public Demo ---
+gradio==4.28.3
+
+# --- Agentic AI: Ollama local LLM ---
+ollama
+
+# --- Environment / Secrets ---
+python-dotenv>=1.0.0

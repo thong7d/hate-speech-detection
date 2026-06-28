@@ -335,6 +335,8 @@ def normalize_text_label_frame(
             "label": pd.to_numeric(df[label_col], errors="raise").astype(int),
         }
     )
+    if "sample_weight" in df.columns:
+        out["sample_weight"] = df["sample_weight"]
     out = out[out["text"].str.len() >= min_text_length].reset_index(drop=True)
     return out
 

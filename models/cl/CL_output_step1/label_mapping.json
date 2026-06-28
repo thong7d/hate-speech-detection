@@ -1,0 +1,12 @@
+{
+  "id2label": {
+    "0": "CLEAN",
+    "1": "OFFENSIVE",
+    "2": "HATE"
+  },
+  "label2id": {
+    "CLEAN": 0,
+    "OFFENSIVE": 1,
+    "HATE": 2
+  }
+}

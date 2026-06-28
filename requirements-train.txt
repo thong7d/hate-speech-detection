@@ -1,0 +1,31 @@
+# Training dependencies for Google Colab (GPU environment)
+# Does NOT extend requirements.txt because Colab pre-installs most packages.
+# Run on Colab: pip install -r requirements-train.txt
+
+# --- Deep Learning (Colab may pre-install these, pin for reproducibility) ---
+torch>=2.2.0
+transformers>=4.41.0
+sentencepiece==0.2.0
+protobuf>=5.28.0
+huggingface_hub>=0.25.0,<1.0
+accelerate>=0.30.0
+sacremoses==0.1.1
+datasets>=2.19.0
+
+# --- NLP Utilities ---
+langdetect==1.0.9
+underthesea
+
+# --- Data Processing ---
+pandas==2.2.2
+scikit-learn==1.4.2
+numpy<2.0
+scipy>=1.12.0
+
+# --- Config ---
+omegaconf==2.3.0
+PyYAML==6.0.2
+
+# --- Visualization (for calibration plot on Colab) ---
+matplotlib
+seaborn

@@ -149,7 +149,24 @@ def train_from_config(config: dict[str, Any]) -> dict[str, Any]:
     print(f"[TRAIN] Label distribution: {train_df['label'].value_counts().to_dict()}")
 
     tokenizer = AutoTokenizer.from_pretrained(model_cfg["base_model"], trust_remote_code=True)
-    if "xlm-roberta" in model_cfg["base_model"].lower():
+    from transformers import AutoConfig
+    try:
+        auto_config = AutoConfig.from_pretrained(model_cfg["base_model"], trust_remote_code=True)
+        archs = getattr(auto_config, "architectures", []) or []
+        model_type = getattr(auto_config, "model_type", "")
+        
+        if any("TextCNN" in a for a in archs):
+            is_xlm_roberta = True
+        elif any("SequenceClassification" in a for a in archs):
+            is_xlm_roberta = False
+        elif any("XLMRoberta" in a or "Roberta" in a for a in archs) or model_type == "xlm-roberta":
+            is_xlm_roberta = True
+        else:
+            is_xlm_roberta = "xlm-roberta" in model_cfg["base_model"].lower()
+    except Exception:
+        is_xlm_roberta = "xlm-roberta" in model_cfg["base_model"].lower()
+
+    if is_xlm_roberta:
         from src.models.classifier import XLMRobertaTextCNN
         model = XLMRobertaTextCNN.from_pretrained(
             model_cfg["base_model"],
@@ -167,6 +184,21 @@ def train_from_config(config: dict[str, Any]) -> dict[str, Any]:
             trust_remote_code=False,
         )
 
+    # Patch load_state_dict to dynamically map beta -> bias and gamma -> weight for LayerNorm
+    original_load_state_dict = model.load_state_dict
+    def patched_load_state_dict(state_dict, strict=True):
+        new_state_dict = {}
+        for k, v in state_dict.items():
+            new_key = k
+            if ".LayerNorm." in new_key or ".layer_norm." in new_key:
+                if new_key.endswith(".beta"):
+                    new_key = new_key[:-4] + "bias"
+                elif new_key.endswith(".gamma"):
+                    new_key = new_key[:-5] + "weight"
+            new_state_dict[new_key] = v
+        return original_load_state_dict(new_state_dict, strict=strict)
+    model.load_state_dict = patched_load_state_dict
+
     max_length = int(model_cfg.get("max_length", 128))
     train_dataset = ViHSDDataset(train_df["text"].tolist(), train_df["label"].tolist(), tokenizer, max_length)
     valid_dataset = ViHSDDataset(valid_df["text"].tolist(), valid_df["label"].tolist(), tokenizer, max_length)
@@ -181,31 +213,40 @@ def train_from_config(config: dict[str, Any]) -> dict[str, Any]:
 
     hf_token = __import__("os").environ.get("HF_TOKEN")
     push_to_hub = bool(hf_token and export_cfg.get("hf_repo_id"))
-    args = TrainingArguments(
-        output_dir=str(output_dir),
-        learning_rate=float(training_cfg.get("learning_rate", 2e-5)),
-        per_device_train_batch_size=int(training_cfg.get("batch_size", 16)),
-        per_device_eval_batch_size=int(training_cfg.get("eval_batch_size", training_cfg.get("batch_size", 16))),
-        num_train_epochs=float(training_cfg.get("num_epochs", 3)),
-        weight_decay=float(training_cfg.get("weight_decay", 0.01)),
-        warmup_ratio=float(training_cfg.get("warmup_ratio", 0.1)),
-        evaluation_strategy="epoch",
-        save_strategy="epoch",
-        load_best_model_at_end=True,
-        metric_for_best_model=metric_for_best_model,
-        greater_is_better=bool(training_cfg.get("greater_is_better", True)),
-        save_total_limit=int(training_cfg.get("save_total_limit", 2)),
-        fp16=bool(training_cfg.get("fp16", False)),
-        max_grad_norm=float(training_cfg.get("max_grad_norm", 1.0)),
-        gradient_accumulation_steps=gradient_accumulation_steps,
-        label_smoothing_factor=label_smoothing,
-        report_to=[],
-        seed=seed,
-        push_to_hub=push_to_hub,
-        hub_model_id=export_cfg.get("hf_repo_id") if push_to_hub else None,
-        hub_strategy="checkpoint",  # Chỉ đồng bộ checkpoint mới nhất lên Hub
-        hub_token=hf_token if push_to_hub else None,
-    )
+    import inspect
+    training_args_kwargs = {
+        "output_dir": str(output_dir),
+        "learning_rate": float(training_cfg.get("learning_rate", 2e-5)),
+        "per_device_train_batch_size": int(training_cfg.get("batch_size", 16)),
+        "per_device_eval_batch_size": int(training_cfg.get("eval_batch_size", training_cfg.get("batch_size", 16))),
+        "num_train_epochs": float(training_cfg.get("num_epochs", 3)),
+        "weight_decay": float(training_cfg.get("weight_decay", 0.01)),
+        "warmup_ratio": float(training_cfg.get("warmup_ratio", 0.1)),
+        "save_strategy": "epoch",
+        "load_best_model_at_end": True,
+        "metric_for_best_model": metric_for_best_model,
+        "greater_is_better": bool(training_cfg.get("greater_is_better", True)),
+        "save_total_limit": int(training_cfg.get("save_total_limit", 2)),
+        "fp16": bool(training_cfg.get("fp16", False)),
+        "max_grad_norm": float(training_cfg.get("max_grad_norm", 1.0)),
+        "gradient_accumulation_steps": gradient_accumulation_steps,
+        "label_smoothing_factor": label_smoothing,
+        "report_to": [],
+        "seed": seed,
+        "push_to_hub": push_to_hub,
+        "hub_model_id": export_cfg.get("hf_repo_id") if push_to_hub else None,
+        "hub_strategy": "checkpoint",  # Chỉ đồng bộ checkpoint mới nhất lên Hub
+        "hub_token": hf_token if push_to_hub else None,
+    }
+    
+    # Resolve version compatibility for evaluation_strategy vs eval_strategy
+    sig = inspect.signature(TrainingArguments.__init__)
+    if "eval_strategy" in sig.parameters:
+        training_args_kwargs["eval_strategy"] = "epoch"
+    else:
+        training_args_kwargs["evaluation_strategy"] = "epoch"
+        
+    args = TrainingArguments(**training_args_kwargs)
     callbacks = []
     if int(training_cfg.get("early_stopping_patience", 0)) > 0:
         callbacks.append(
@@ -213,6 +254,25 @@ def train_from_config(config: dict[str, Any]) -> dict[str, Any]:
                 early_stopping_patience=int(training_cfg.get("early_stopping_patience", 2))
             )
         )
+
+    if training_cfg.get("freeze_backbone_first_epoch", False):
+        from transformers import TrainerCallback
+        class FreezeBackboneCallback(TrainerCallback):
+            def __init__(self, model):
+                self.model = model
+            def on_epoch_begin(self, args, state, control, **kwargs):
+                epoch = int(round(state.epoch))
+                if epoch == 0:
+                    print("[CALLBACK] Freezing roberta.encoder for Epoch 1...")
+                    if hasattr(self.model, "roberta") and hasattr(self.model.roberta, "encoder"):
+                        for param in self.model.roberta.encoder.parameters():
+                            param.requires_grad = False
+                else:
+                    print(f"[CALLBACK] Unfreezing roberta.encoder for Epoch {epoch + 1}...")
+                    if hasattr(self.model, "roberta") and hasattr(self.model.roberta, "encoder"):
+                        for param in self.model.roberta.encoder.parameters():
+                            param.requires_grad = True
+        callbacks.append(FreezeBackboneCallback(model))
 
     loss_name = str(training_cfg.get("loss", "cross_entropy")).lower()
     focal_gamma = float(training_cfg.get("focal_gamma", 2.0))
@@ -246,22 +306,32 @@ def train_from_config(config: dict[str, Any]) -> dict[str, Any]:
             }
         )
 
-    trainer = trainer_cls(
-        model=model,
-        args=args,
-        train_dataset=train_dataset,
-        eval_dataset=valid_dataset,
-        tokenizer=tokenizer,
-        compute_metrics=compute_metrics,
-        callbacks=callbacks,
-        **trainer_kwargs,
-    )
+    # Resolve version compatibility for tokenizer vs processing_class in Trainer
+    import inspect
+    trainer_kwargs_main = {
+        "model": model,
+        "args": args,
+        "train_dataset": train_dataset,
+        "eval_dataset": valid_dataset,
+        "compute_metrics": compute_metrics,
+        "callbacks": callbacks,
+    }
+    
+    trainer_sig = inspect.signature(Trainer.__init__)
+    if "processing_class" in trainer_sig.parameters:
+        trainer_kwargs_main["processing_class"] = tokenizer
+    else:
+        trainer_kwargs_main["tokenizer"] = tokenizer
+        
+    trainer_kwargs_main.update(trainer_kwargs)
+    
+    trainer = trainer_cls(**trainer_kwargs_main)
 
     output_dir = __import__("pathlib").Path(output_dir)
     resume_from_checkpoint = None
     if output_dir.exists():
         # Quét tìm tất cả các thư mục dạng checkpoint-* thực tế trong thư mục đầu ra (bao gồm cả đệ quy)
-        checkpoints = list(output_dir.glob("**/checkpoint-*"))
+        checkpoints = [p for p in output_dir.glob("**/checkpoint-*") if p.name.split("-")[-1].isdigit()]
         if checkpoints:
             # Sắp xếp danh sách dựa trên chỉ số bước (step) huấn luyện tăng dần
             checkpoints.sort(key=lambda x: int(x.name.split("-")[-1]))
@@ -281,7 +351,7 @@ def train_from_config(config: dict[str, Any]) -> dict[str, Any]:
     final_model_dir = resolve_path(export_cfg["final_model_dir"])
     final_model_dir.mkdir(parents=True, exist_ok=True)
 
-    if "xlm-roberta" in model_cfg["base_model"].lower():
+    if is_xlm_roberta:
         from src.models.classifier import XLMRobertaTextCNN
         # Register ONLY the custom architecture, DO NOT register built-in XLMRobertaConfig
         XLMRobertaTextCNN.register_for_auto_class("AutoModelForSequenceClassification")
@@ -548,7 +618,7 @@ def _custom_loss_trainer_class(base_trainer):
                     sampler=sampler,
                     collate_fn=self.data_collator,
                     num_workers=self.args.dataloader_num_workers,
-                    pin_memory=self.args.pin_memory,
+                    pin_memory=getattr(self.args, "dataloader_pin_memory", getattr(self.args, "pin_memory", True)),
                 )
             
             return super().get_train_dataloader()

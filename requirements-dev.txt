@@ -1,7 +1,20 @@
--r requirements.txt
+# Development and testing dependencies
+# Extends requirements-local.txt with linting, testing, and model explainability tools.
+# Install: pip install -r requirements-dev.txt
+
+-r requirements-local.txt
+
+# --- Testing ---
 pytest==8.2.2
 httpx==0.27.0
+
+# --- Linting ---
 ruff==0.4.8
-captum
+
+# --- Visualization & Explainability ---
 matplotlib
 seaborn
+captum
+
+# --- PDF Parsing (for local data inspection only) ---
+# pdfplumber  # Uncomment if needed

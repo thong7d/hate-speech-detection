@@ -1,0 +1,71 @@
+{
+  "model_version": "v2.0.0",
+  "base_model": "artifacts/hate_speech_model/model",
+  "trained_at": "2026-06-27T10:17:19.517566+00:00",
+  "dataset": {
+    "train_path": "data/processed/continual_train.parquet",
+    "valid_path": "data/processed/continual_dev.parquet",
+    "test_path": "data/processed/test.parquet",
+    "text_column": "text",
+    "label_column": "label"
+  },
+  "preprocessing": {
+    "use_word_segmentation": false,
+    "normalize_teencode": true,
+    "normalize_repeated_chars": true,
+    "unicode_normalize": true
+  },
+  "best_checkpoint": "/content/hate-speech-detection/artifacts/hate_speech_model/checkpoint/checkpoint-412",
+  "loss": "cross_entropy",
+  "focal_gamma": null,
+  "label_smoothing": 0.1,
+  "layerwise_lr_decay": 0.95,
+  "gradient_accumulation_steps": 2,
+  "class_weighting": "sqrt_balanced",
+  "class_weights": [
+    0.6127743294492612,
+    2.4525678712804893,
+    2.42121859096626
+  ],
+  "class_oversampling": {
+    "enabled": false
+  },
+  "robustness_augmentation": {
+    "enabled": false
+  },
+  "contrastive_augmentation": {
+    "enabled": false
+  },
+  "diacritic_augmentation": {
+    "enabled": false
+  },
+  "eda_augmentation": {
+    "enabled": false
+  },
+  "diacritic_removal_augmentation": {
+    "enabled": false
+  },
+  "teencode_augmentation": {
+    "enabled": false
+  },
+  "training_set_size": 13155,
+  "validation_set_size": 1000,
+  "calibration": {
+    "temperature": 1.226994,
+    "method": "weighted_scalar_temperature_scaling",
+    "ece_before": 0.163434,
+    "ece_after": 0.223466,
+    "ece_reduction_pct": -36.73,
+    "argmax_preserved": true,
+    "classwise_ece_before": {
+      "ece_CLEAN": 0.194586,
+      "ece_OFFENSIVE": 0.099768,
+      "ece_HATE": 0.103584
+    },
+    "classwise_ece_after": {
+      "ece_CLEAN": 0.249042,
+      "ece_OFFENSIVE": 0.124096,
+      "ece_HATE": 0.131791
+    }
+  }
+}
