@@ -54,6 +54,10 @@ To reproduce the CL models:
 2. Mount your Google Drive with the VLSP-2019 data at `/content/drive/MyDrive/CL_data/`.
 3. Run all cells. Step 1 outputs to `CL_output_step1/`, Step 2 outputs to `CL_output_step2/`.
 
+### Option 5: Download from Google Drive (for evaluators)
+You can manually download the complete trained model directories (including CL checkpoints) from the following Google Drive link:
+[Google Drive Folder - Trained Models](https://drive.google.com/drive/folders/1S6w4g_-yJaX1bynwjd5Fs3pSujZm4lJZ?usp=drive_link)
+
 ---
 
 ## Model Versions
